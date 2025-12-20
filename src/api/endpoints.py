@@ -665,31 +665,40 @@ async def train_model_current_season():
         # Fetch from football-data.org only
         for season in fd_seasons:
             for lid in target_leagues:
-                logger.info(f"[football-data.org] Fetching season {season} for league {lid}...")
-                fd_matches = await fd_client.get_finished_matches(
-                    league_id=lid,
-                    season=season
-                )
-                
-                # Convert FDMatch to Match format
-                for fm in fd_matches:
-                    if fm.home_score is not None and fm.away_score is not None:
-                        match = Match(
-                            fixture_id=fm.match_id,
-                            league_id=fm.competition_id,
-                            league_name=fm.competition_name,
-                            home_team_id=fm.home_team_id,
-                            home_team_name=fm.home_team_name,
-                            away_team_id=fm.away_team_id,
-                            away_team_name=fm.away_team_name,
-                            date=fm.utc_date,
-                            home_goals=fm.home_score,
-                            away_goals=fm.away_score,
-                            status="FT"
-                        )
-                        all_matches.append(match)
-                
-                logger.info(f"  Got {len(fd_matches)} matches")
+                try:
+                    logger.info(f"[football-data.org] Fetching season {season} for league {lid}...")
+                    fd_matches = await fd_client.get_finished_matches(
+                        league_id=lid,
+                        season=season
+                    )
+                    
+                    logger.info(f"[football-data.org] Received {len(fd_matches)} matches for league {lid}, season {season}")
+                    
+                    # Convert FDMatch to Match format
+                    converted_count = 0
+                    for fm in fd_matches:
+                        if fm.home_score is not None and fm.away_score is not None:
+                            match = Match(
+                                fixture_id=fm.match_id,
+                                league_id=fm.competition_id,
+                                league_name=fm.competition_name,
+                                home_team_id=fm.home_team_id,
+                                home_team_name=fm.home_team_name,
+                                away_team_id=fm.away_team_id,
+                                away_team_name=fm.away_team_name,
+                                date=fm.utc_date,
+                                home_goals=fm.home_score,
+                                away_goals=fm.away_score,
+                                status="FT"
+                            )
+                            all_matches.append(match)
+                            converted_count += 1
+                    
+                    logger.info(f"[football-data.org] Converted {converted_count} matches for league {lid}, season {season}")
+                except Exception as e:
+                    logger.error(f"[football-data.org] Failed to fetch league {lid}, season {season}: {e}")
+                    # Continue with other leagues even if one fails
+                    continue
         
         logger.info(f"Total matches collected: {len(all_matches)}")
         
