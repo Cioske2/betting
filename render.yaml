@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: football-betting-api
+    runtime: python
+    plan: free
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: API_FOOTBALL_KEY
+        sync: false
+      - key: FOOTBALL_DATA_TOKEN
+        sync: false
+      - key: LEAGUE_IDS
+        value: "39,140,135,78,61"
+      - key: POISSON_WEIGHT
+        value: "0.4"
+      - key: XGBOOST_WEIGHT
+        value: "0.6"
+      - key: MIN_EDGE
+        value: "0.03"
+      - key: KELLY_FRACTION
+        value: "0.25"
+    healthCheckPath: /health
