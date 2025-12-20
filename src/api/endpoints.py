@@ -9,7 +9,7 @@ Provides REST endpoints for:
 - Model training and status
 """
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -632,16 +632,31 @@ async def train_model(request: TrainRequest):
 
 
 @router.post("/train-current", tags=["Model"])
-async def train_model_current_season():
+async def train_model_current_season(background_tasks: BackgroundTasks):
     """
     Train models using current season (2024-2025) data from football-data.org.
     
     Uses football-data.org API which provides FREE access to current season.
     Trains on all 5 top European leagues.
     
+    Returns immediately and trains in background.
     Just click Execute - no parameters needed!
     """
     settings = get_settings()
+    
+    # Return immediately, train in background
+    background_tasks.add_task(train_models_background, settings)
+    
+    return {
+        "status": "started",
+        "message": "Model training started in background. Check /api/health to see when complete.",
+        "leagues": settings.league_ids,
+        "seasons": [2025, 2024]
+    }
+
+
+async def train_models_background(settings):
+    """Background task for model training."""
     fd_client = get_fd_client()
     ensemble = get_ensemble()
     feature_eng = get_feature_engineer()
@@ -750,21 +765,11 @@ async def train_model_current_season():
         logger.info("Saving models to disk...")
         save_models(ensemble, feature_eng)
         
-        return {
-            "status": "success",
-            "message": f"Models trained with {len(fd_seasons)} seasons: {fd_seasons}",
-            "details": {
-                "matches_used": len(all_matches),
-                "leagues": target_leagues,
-                "seasons": {
-                    "from_football_data_org": fd_seasons
-                },
-                "models": ensemble.get_model_status()
-            }
-        }
+        print(f"✅ TRAINING COMPLETE! Models saved with {len(all_matches)} matches")
+        logger.info(f"Training complete with {len(all_matches)} matches")
     except Exception as e:
+        print(f"❌ TRAINING FAILED: {e}")
         logger.error(f"Training failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/upcoming-matches", tags=["Data"])
