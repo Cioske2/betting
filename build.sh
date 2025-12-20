@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Render build script
+# Railway build script
 
 set -o errexit
 
