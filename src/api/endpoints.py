@@ -241,26 +241,41 @@ async def predict_match(request: PredictRequest):
     Uses ensemble of Poisson and XGBoost models.
     Returns probabilities for Home Win, Draw, and Away Win.
     """
-    ensemble = get_ensemble()
-    
-    prediction = ensemble.predict(
-        home_team_id=request.home_team_id,
-        away_team_id=request.away_team_id,
-        home_team_name=request.home_team_name,
-        away_team_name=request.away_team_name,
-        league_id=request.league_id
-    )
-    
-    result = prediction.to_dict()
-    return PredictionResponse(
-        match=result["match"],
-        probabilities=result["probabilities"],
-        model_details=result["model_details"],
-        expected_goals=result["expected_goals"],
-        prediction=result["prediction"],
-        confidence=result["confidence"],
-        timestamp=result["timestamp"]
-    )
+    try:
+        ensemble = get_ensemble()
+        
+        if not ensemble.poisson.is_fitted:
+            raise HTTPException(
+                status_code=503,
+                detail="Models not trained yet. Please train models first using /api/train-current"
+            )
+        
+        prediction = ensemble.predict(
+            home_team_id=request.home_team_id,
+            away_team_id=request.away_team_id,
+            home_team_name=request.home_team_name,
+            away_team_name=request.away_team_name,
+            league_id=request.league_id
+        )
+        
+        result = prediction.to_dict()
+        return PredictionResponse(
+            match=result["match"],
+            probabilities=result["probabilities"],
+            model_details=result["model_details"],
+            expected_goals=result["expected_goals"],
+            prediction=result["prediction"],
+            confidence=result["confidence"],
+            timestamp=result["timestamp"]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Prediction failed for {request.home_team_name} vs {request.away_team_name}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {str(e)}"
+        )
 
 
 @router.get("/predict/{home_team_id}/{away_team_id}", tags=["Predictions"])
@@ -640,15 +655,14 @@ async def train_model_current_season():
     current_month = datetime.now().month
     current_season = current_year if current_month >= 8 else current_year - 1
     
-    # We'll fetch 3 seasons: current, previous, and 2 years ago
-    # Football-data.org for current seasons, API-Football for older
+    # Use only football-data.org (API-Football account is suspended)
+    # Fetch 2 seasons: current and previous
     fd_seasons = [current_season, current_season - 1]  # 2025, 2024
-    api_football_seasons = [current_season - 2]  # 2023
     
     try:
         all_matches = []
         
-        # Fetch from football-data.org (current + last season)
+        # Fetch from football-data.org only
         for season in fd_seasons:
             for lid in target_leagues:
                 logger.info(f"[football-data.org] Fetching season {season} for league {lid}...")
@@ -676,18 +690,6 @@ async def train_model_current_season():
                         all_matches.append(match)
                 
                 logger.info(f"  Got {len(fd_matches)} matches")
-        
-        # Fetch from API-Football (older seasons - free for 2021-2023)
-        api_client = get_client()
-        for season in api_football_seasons:
-            for lid in target_leagues:
-                logger.info(f"[API-Football] Fetching season {season} for league {lid}...")
-                api_matches = await api_client.get_finished_matches(
-                    league_id=lid,
-                    season=season
-                )
-                all_matches.extend(api_matches)
-                logger.info(f"  Got {len(api_matches)} matches")
         
         logger.info(f"Total matches collected: {len(all_matches)}")
         
@@ -742,16 +744,15 @@ async def train_model_current_season():
                 },
                 "models": ensemble.get_model_status()
             }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Training with current season failed: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/upcoming-matches", tags=["Data"])
+        return {
+            "status": "success",
+            "message": f"Models trained with {len(fd_seasons)} seasons: {fd_seasons}",
+            "details": {
+                "matches_used": len(all_matches),
+                "leagues": target_leagues,
+                "seasons": {
+                    "from_football_data_org": fd_seasons
+                },ming-matches", tags=["Data"])
 async def get_upcoming_matches(
     league_ids: Optional[str] = Query(
         default=None,
