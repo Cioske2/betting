@@ -265,36 +265,30 @@ class APIFootballClient:
         today = datetime.now().strftime("%Y-%m-%d")
         end_date = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         
-        # Season calculation: if we're past July, season started this year, otherwise last year
-        # E.g., Dec 2025 -> season 2024 (2024-25), Aug 2024 -> season 2024 (2024-25)
+        # API-Football FREE plan only has access to seasons 2021-2023
+        # For recent/current matches, we'll use season 2024 as fallback
+        # In production, upgrade API plan or use football-data.org
         current_year = datetime.now().year
         current_month = datetime.now().month
+        
+        # Try current season calculation first
         season = current_year if current_month >= 8 else current_year - 1
-        # Actually, football seasons go Aug-May, so Dec 2025 should be season 2025 (2025-26)
-        # But API-Football uses the starting year, so 2024-25 season = 2024
-        # Let's try both current and previous season
         
-        # Try current season first
-        matches = await self.get_fixtures(
-            league_id=league_id,
-            season=season,
-            from_date=today,
-            to_date=end_date,
-            status="NS"
-        )
-        
-        # If no matches found, try previous season
-        if not matches and current_month <= 7:
-            season = current_year - 1
+        # Free plan limitation: max season is 2023
+        # Try 2024 first (might work), then fallback to 2023
+        for try_season in [2024, 2023]:
             matches = await self.get_fixtures(
                 league_id=league_id,
-                season=season,
+                season=try_season,
                 from_date=today,
                 to_date=end_date,
                 status="NS"
             )
+            if matches:
+                return matches
         
-        return matches
+        # No matches found in available seasons
+        return []
     
     async def get_team_statistics(
         self,

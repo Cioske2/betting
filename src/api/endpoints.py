@@ -761,19 +761,19 @@ async def get_upcoming_matches(
         default=7,
         ge=1,
         le=30,
-        description="Number of days to look ahead"
+        description="Number of days to look ahead (not used with football-data.org)"
     )
 ):
     """
     Get all upcoming matches for specified leagues.
     
-    Returns matches scheduled in the next N days that haven't been played yet.
-    Perfect for batch predictions!
+    Uses football-data.org API for current season data (free tier supports current season).
+    Returns scheduled matches that haven't been played yet.
     
     Example: /api/upcoming-matches?league_ids=39,140&days_ahead=7
     """
     settings = get_settings()
-    client = get_client()
+    fd_client = get_fd_client()
     
     # Parse league IDs
     if league_ids:
@@ -785,19 +785,21 @@ async def get_upcoming_matches(
         all_upcoming = []
         
         for league_id in target_leagues:
-            logger.info(f"Fetching upcoming matches for league {league_id}...")
-            matches = await client.get_upcoming_fixtures(
+            logger.info(f"Fetching upcoming matches for league {league_id} from football-data.org...")
+            
+            # Use football-data.org for upcoming matches (supports current season)
+            matches = await fd_client.get_upcoming_matches(
                 league_id=league_id,
-                days_ahead=days_ahead
+                limit=20  # Get up to 20 upcoming matches per league
             )
             
             for match in matches:
                 all_upcoming.append({
-                    "fixture_id": match.fixture_id,
-                    "date": match.date.isoformat(),
+                    "fixture_id": match.match_id,
+                    "date": match.utc_date.isoformat(),
                     "league": {
-                        "id": match.league_id,
-                        "name": match.league_name
+                        "id": match.competition_id,
+                        "name": match.competition_name
                     },
                     "home_team": {
                         "id": match.home_team_id,
