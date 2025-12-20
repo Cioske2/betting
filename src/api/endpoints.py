@@ -734,25 +734,22 @@ async def train_model_current_season():
         
         return {
             "status": "success",
-            "message": f"Models trained with 3 seasons: {fd_seasons + api_football_seasons}",
-            "details": {
-                "matches_used": len(all_matches),
-                "leagues": target_leagues,
-                "seasons": {
-                    "from_football_data_org": fd_seasons,
-                    "from_api_football": api_football_seasons
-                },
-                "models": ensemble.get_model_status()
-            }
-        return {
-            "status": "success",
             "message": f"Models trained with {len(fd_seasons)} seasons: {fd_seasons}",
             "details": {
                 "matches_used": len(all_matches),
                 "leagues": target_leagues,
                 "seasons": {
                     "from_football_data_org": fd_seasons
-                },ming-matches", tags=["Data"])
+                },
+                "models": ensemble.get_model_status()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/upcoming-matches", tags=["Data"])
 async def get_upcoming_matches(
     league_ids: Optional[str] = Query(
         default=None,
