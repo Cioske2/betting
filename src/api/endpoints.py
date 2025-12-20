@@ -165,7 +165,7 @@ class TrainRequest(BaseModel):
 
 class PredictionResponse(BaseModel):
     """Response model for predictions."""
-    match: Dict[str, str]
+    match: Dict[str, Any]
     probabilities: Dict[str, float]
     model_details: Dict[str, Any]
     expected_goals: Dict[str, float]
@@ -657,6 +657,8 @@ async def train_model_current_season(background_tasks: BackgroundTasks):
 
 async def train_models_background(settings):
     """Background task for model training."""
+    import asyncio
+    
     fd_client = get_fd_client()
     ensemble = get_ensemble()
     feature_eng = get_feature_engineer()
@@ -713,6 +715,10 @@ async def train_models_background(settings):
                     
                     print(f"💾 [FD.org] Converted {converted_count} matches for league {lid}, season {season}")
                     logger.info(f"[football-data.org] Converted {converted_count} matches for league {lid}, season {season}")
+                    
+                    # Rate limit: 10 requests per minute = 1 every 6 seconds
+                    # Add small delay to be safe
+                    await asyncio.sleep(7)
                 except Exception as e:
                     print(f"❌ [FD.org] FAILED league {lid}, season {season}: {e}")
                     logger.error(f"[football-data.org] Failed to fetch league {lid}, season {season}: {e}")
