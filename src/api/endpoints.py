@@ -29,6 +29,7 @@ router = APIRouter()
 _ensemble: Optional[EnsemblePredictor] = None
 _feature_engineer: Optional[FeatureEngineer] = None
 _value_analyzer: Optional[ValueBetAnalyzer] = None
+_training_in_progress: bool = False
 
 # Model save paths
 import os
@@ -201,15 +202,17 @@ async def health_check():
     
     Returns model readiness and API configuration status.
     """
+    global _training_in_progress
     settings = get_settings()
     ensemble = get_ensemble()
     
-    return HealthResponse(
-        status="healthy",
-        models=ensemble.get_model_status(),
-        api_configured=bool(settings.api_football_key),
-        timestamp=datetime.now().isoformat()
-    )
+    return {
+        "status": "healthy",
+        "models": ensemble.get_model_status(),
+        "api_configured": bool(settings.api_football_key),
+        "training_in_progress": _training_in_progress,
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 @router.get("/leagues", tags=["Data"])
@@ -242,13 +245,20 @@ async def predict_match(request: PredictRequest):
     Returns probabilities for Home Win, Draw, and Away Win.
     """
     try:
+        global _training_in_progress
         ensemble = get_ensemble()
         
         if not ensemble.poisson.is_fitted:
-            raise HTTPException(
-                status_code=503,
-                detail="Models not trained yet. Please train models first using /api/train-current"
-            )
+            if _training_in_progress:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Models are currently training in background. Please wait 1-2 minutes and try again."
+                )
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Models not trained yet. Please train models first using /api/train-current"
+                )
         
         prediction = ensemble.predict(
             home_team_id=request.home_team_id,
@@ -657,7 +667,11 @@ async def train_model_current_season(background_tasks: BackgroundTasks):
 
 async def train_models_background(settings):
     """Background task for model training."""
+    global _training_in_progress
     import asyncio
+    
+    _training_in_progress = True
+    print("🚀 TRAINING STARTED IN BACKGROUND")
     
     fd_client = get_fd_client()
     ensemble = get_ensemble()
@@ -776,6 +790,10 @@ async def train_models_background(settings):
     except Exception as e:
         print(f"❌ TRAINING FAILED: {e}")
         logger.error(f"Training failed: {e}")
+    finally:
+        global _training_in_progress
+        _training_in_progress = False
+        print(f"🏁 Training finished. Status: training_in_progress={_training_in_progress}")
 
 
 @router.get("/upcoming-matches", tags=["Data"])
