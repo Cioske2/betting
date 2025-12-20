@@ -666,12 +666,14 @@ async def train_model_current_season():
         for season in fd_seasons:
             for lid in target_leagues:
                 try:
+                    print(f"🔍 [FD.org] Fetching season {season} for league {lid}...")
                     logger.info(f"[football-data.org] Fetching season {season} for league {lid}...")
                     fd_matches = await fd_client.get_finished_matches(
                         league_id=lid,
                         season=season
                     )
                     
+                    print(f"✅ [FD.org] Received {len(fd_matches)} matches for league {lid}, season {season}")
                     logger.info(f"[football-data.org] Received {len(fd_matches)} matches for league {lid}, season {season}")
                     
                     # Convert FDMatch to Match format
@@ -694,12 +696,15 @@ async def train_model_current_season():
                             all_matches.append(match)
                             converted_count += 1
                     
+                    print(f"💾 [FD.org] Converted {converted_count} matches for league {lid}, season {season}")
                     logger.info(f"[football-data.org] Converted {converted_count} matches for league {lid}, season {season}")
                 except Exception as e:
+                    print(f"❌ [FD.org] FAILED league {lid}, season {season}: {e}")
                     logger.error(f"[football-data.org] Failed to fetch league {lid}, season {season}: {e}")
                     # Continue with other leagues even if one fails
                     continue
         
+        print(f"📊 TOTAL matches collected: {len(all_matches)}")
         logger.info(f"Total matches collected: {len(all_matches)}")
         
         if len(all_matches) < 50:
@@ -726,18 +731,22 @@ async def train_model_current_season():
         ])
         
         # Train Poisson model
+        print("🎯 Training Poisson model...")
         logger.info("Training Poisson model...")
         ensemble.fit_poisson(matches_df)
         
         # Prepare features for XGBoost
+        print("🔧 Preparing features for XGBoost...")
         logger.info("Preparing features for XGBoost...")
         X, y = feature_eng.get_training_data(all_matches)
         
         # Train XGBoost
+        print("🚀 Training XGBoost model...")
         logger.info("Training XGBoost model...")
         ensemble.fit_xgboost(X, y)
         
         # Save models to disk
+        print("💾 Saving models to disk...")
         logger.info("Saving models to disk...")
         save_models(ensemble, feature_eng)
         
