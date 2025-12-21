@@ -293,7 +293,15 @@ async def predict_match(request: PredictRequest):
             league_id=request.league_id
         )
         
+        # Fetch ranks for display
+        fd_client = get_fd_client()
+        standings = await fd_client.get_standings(league_id=request.league_id)
+        ranks = {s["team_id"]: s["rank"] for s in standings}
+        
         result = prediction.to_dict()
+        result["match"]["home_rank"] = ranks.get(request.home_team_id)
+        result["match"]["away_rank"] = ranks.get(request.away_team_id)
+        
         return PredictionResponse(
             match=result["match"],
             probabilities=result["probabilities"],
@@ -859,6 +867,10 @@ async def get_upcoming_matches(
         for league_id in target_leagues:
             logger.info(f"Fetching upcoming matches for league {league_id} from football-data.org...")
             
+            # Fetch standings for this league to get ranks
+            standings_data = await fd_client.get_standings(league_id=league_id)
+            ranks = {s["team_id"]: s["rank"] for s in standings_data}
+            
             # Use football-data.org for upcoming matches
             matches = await fd_client.get_upcoming_matches(
                 league_id=league_id,
@@ -879,11 +891,13 @@ async def get_upcoming_matches(
                     },
                     "home_team": {
                         "id": match.home_team_id,
-                        "name": match.home_team_name
+                        "name": match.home_team_name,
+                        "rank": ranks.get(match.home_team_id)
                     },
                     "away_team": {
                         "id": match.away_team_id,
-                        "name": match.away_team_name
+                        "name": match.away_team_name,
+                        "rank": ranks.get(match.away_team_id)
                     },
                     "status": match.status
                 })
