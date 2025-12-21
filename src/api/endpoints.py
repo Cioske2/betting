@@ -29,7 +29,6 @@ router = APIRouter()
 _ensemble: Optional[EnsemblePredictor] = None
 _feature_engineer: Optional[FeatureEngineer] = None
 _value_analyzer: Optional[ValueBetAnalyzer] = None
-_training_in_progress: bool = False
 
 # Model save paths
 import os
@@ -40,6 +39,22 @@ MODEL_DIR = Path("models")
 POISSON_PATH = MODEL_DIR / "poisson_model.pkl"
 XGBOOST_PATH = MODEL_DIR / "xgboost_model.pkl"
 FEATURE_ENG_PATH = MODEL_DIR / "feature_engineer.pkl"
+TRAINING_LOCK_PATH = MODEL_DIR / "training.lock"
+
+
+def is_training() -> bool:
+    """Check if training is in progress across all workers."""
+    return TRAINING_LOCK_PATH.exists()
+
+
+def set_training_status(status: bool) -> None:
+    """Set training status across all workers."""
+    MODEL_DIR.mkdir(exist_ok=True)
+    if status:
+        TRAINING_LOCK_PATH.touch()
+    else:
+        if TRAINING_LOCK_PATH.exists():
+            TRAINING_LOCK_PATH.unlink()
 
 
 def save_models(ensemble: EnsemblePredictor, feature_eng: FeatureEngineer) -> None:
@@ -92,6 +107,9 @@ def get_ensemble() -> EnsemblePredictor:
         )
         # Try to load saved models
         load_models(_ensemble)
+    elif not _ensemble.poisson.is_fitted or not _ensemble.xgboost.is_fitted:
+        # If not fitted, try to reload (maybe another worker just finished training)
+        load_models(_ensemble)
     return _ensemble
 
 
@@ -112,6 +130,15 @@ def get_feature_engineer() -> FeatureEngineer:
                 _feature_engineer = FeatureEngineer(form_matches=settings.form_matches)
         else:
             _feature_engineer = FeatureEngineer(form_matches=settings.form_matches)
+    elif _feature_engineer._matches_df is None and FEATURE_ENG_PATH.exists():
+        # If not loaded, try to reload
+        try:
+            with open(FEATURE_ENG_PATH, "rb") as f:
+                _feature_engineer = pickle.load(f)
+            logger.info("Feature engineer reloaded from disk")
+        except Exception as e:
+            logger.warning(f"Failed to reload feature engineer: {e}")
+            
     return _feature_engineer
 
 
@@ -202,7 +229,6 @@ async def health_check():
     
     Returns model readiness and API configuration status.
     """
-    global _training_in_progress
     settings = get_settings()
     ensemble = get_ensemble()
     
@@ -210,7 +236,7 @@ async def health_check():
         "status": "healthy",
         "models": ensemble.get_model_status(),
         "api_configured": bool(settings.api_football_key),
-        "training_in_progress": _training_in_progress,
+        "training_in_progress": is_training(),
         "timestamp": datetime.now().isoformat()
     }
 
@@ -245,11 +271,10 @@ async def predict_match(request: PredictRequest):
     Returns probabilities for Home Win, Draw, and Away Win.
     """
     try:
-        global _training_in_progress
         ensemble = get_ensemble()
         
         if not ensemble.poisson.is_fitted:
-            if _training_in_progress:
+            if is_training():
                 raise HTTPException(
                     status_code=503,
                     detail="Models are currently training in background. Please wait 1-2 minutes and try again."
@@ -667,10 +692,9 @@ async def train_model_current_season(background_tasks: BackgroundTasks):
 
 async def train_models_background(settings):
     """Background task for model training."""
-    global _training_in_progress
     import asyncio
     
-    _training_in_progress = True
+    set_training_status(True)
     print("🚀 TRAINING STARTED IN BACKGROUND")
     
     fd_client = get_fd_client()
@@ -795,8 +819,8 @@ async def train_models_background(settings):
         print(f"❌ TRAINING FAILED: {e}")
         logger.error(f"Training failed: {e}")
     finally:
-        _training_in_progress = False
-        print(f"🏁 Training finished. Status: training_in_progress={_training_in_progress}")
+        set_training_status(False)
+        print(f"🏁 Training finished. Status: training_in_progress={is_training()}")
 
 
 @router.get("/upcoming-matches", tags=["Data"])
