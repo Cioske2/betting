@@ -809,16 +809,14 @@ async def get_upcoming_matches(
         default=7,
         ge=1,
         le=30,
-        description="Number of days to look ahead (not used with football-data.org)"
+        description="Number of days to look ahead"
     )
 ):
     """
     Get all upcoming matches for specified leagues.
     
-    Uses football-data.org API for current season data (free tier supports current season).
+    Uses football-data.org API for current season data.
     Returns scheduled matches that haven't been played yet.
-    
-    Example: /api/upcoming-matches?league_ids=39,140&days_ahead=7
     """
     settings = get_settings()
     fd_client = get_fd_client()
@@ -831,17 +829,23 @@ async def get_upcoming_matches(
     
     try:
         all_upcoming = []
+        from datetime import datetime, timedelta, timezone
+        max_date = datetime.now(timezone.utc) + timedelta(days=days_ahead)
         
         for league_id in target_leagues:
             logger.info(f"Fetching upcoming matches for league {league_id} from football-data.org...")
             
-            # Use football-data.org for upcoming matches (supports current season)
+            # Use football-data.org for upcoming matches
             matches = await fd_client.get_upcoming_matches(
                 league_id=league_id,
-                limit=20  # Get up to 20 upcoming matches per league
+                limit=50  # Increased limit to allow for filtering
             )
             
             for match in matches:
+                # Filter by days_ahead
+                if match.utc_date > max_date:
+                    continue
+                    
                 all_upcoming.append({
                     "fixture_id": match.match_id,
                     "date": match.utc_date.isoformat(),
@@ -862,7 +866,7 @@ async def get_upcoming_matches(
             
             logger.info(f"Found {len(matches)} upcoming matches for league {league_id}")
         
-        # Sort by date
+        # Sort by date (nearest first)
         all_upcoming.sort(key=lambda x: x["date"])
         
         return {
