@@ -791,7 +791,6 @@ async def train_models_background(settings):
         print(f"❌ TRAINING FAILED: {e}")
         logger.error(f"Training failed: {e}")
     finally:
-        global _training_in_progress
         _training_in_progress = False
         print(f"🏁 Training finished. Status: training_in_progress={_training_in_progress}")
 
