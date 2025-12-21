@@ -269,11 +269,28 @@ class FeatureEngineer:
         if self._matches_df is None or self._matches_df.empty:
             return self._empty_form()
         
-        df = self._matches_df[self._matches_df["date"] < before_date].copy()
-        
-        # Filter for team matches
+        # Filter for team matches first (much faster than filtering all matches by date)
         if home_only:
-            team_matches = df[df["home_team_id"] == team_id].copy()
+            team_matches = self._matches_df[self._matches_df["home_team_id"] == team_id]
+        elif away_only:
+            team_matches = self._matches_df[self._matches_df["away_team_id"] == team_id]
+        else:
+            team_matches = self._matches_df[
+                (self._matches_df["home_team_id"] == team_id) | 
+                (self._matches_df["away_team_id"] == team_id)
+            ]
+            
+        if team_matches.empty:
+            return self._empty_form()
+            
+        # Then filter by date and create a copy for calculations
+        team_matches = team_matches[team_matches["date"] < before_date].copy()
+        
+        if team_matches.empty:
+            return self._empty_form()
+
+        # Calculate statistics
+        if home_only:
             team_matches["goals_scored"] = team_matches["home_goals"]
             team_matches["goals_conceded"] = team_matches["away_goals"]
             team_matches["points"] = team_matches.apply(
@@ -284,7 +301,6 @@ class FeatureEngineer:
             team_matches["clean_sheet"] = (team_matches["away_goals"] == 0).astype(int)
             team_matches["btts"] = ((team_matches["home_goals"] > 0) & (team_matches["away_goals"] > 0)).astype(int)
         elif away_only:
-            team_matches = df[df["away_team_id"] == team_id].copy()
             team_matches["goals_scored"] = team_matches["away_goals"]
             team_matches["goals_conceded"] = team_matches["home_goals"]
             team_matches["points"] = team_matches.apply(
@@ -295,30 +311,34 @@ class FeatureEngineer:
             team_matches["clean_sheet"] = (team_matches["home_goals"] == 0).astype(int)
             team_matches["btts"] = ((team_matches["home_goals"] > 0) & (team_matches["away_goals"] > 0)).astype(int)
         else:
-            # All matches
-            home = df[df["home_team_id"] == team_id].copy()
-            home["goals_scored"] = home["home_goals"]
-            home["goals_conceded"] = home["away_goals"]
-            home["points"] = home.apply(
-                lambda x: 3 if x["home_goals"] > x["away_goals"] 
-                else (1 if x["home_goals"] == x["away_goals"] else 0), axis=1
-            )
-            home["win"] = (home["home_goals"] > home["away_goals"]).astype(int)
-            home["clean_sheet"] = (home["away_goals"] == 0).astype(int)
-            home["btts"] = ((home["home_goals"] > 0) & (home["away_goals"] > 0)).astype(int)
-            
-            away = df[df["away_team_id"] == team_id].copy()
-            away["goals_scored"] = away["away_goals"]
-            away["goals_conceded"] = away["home_goals"]
-            away["points"] = away.apply(
-                lambda x: 3 if x["away_goals"] > x["home_goals"] 
-                else (1 if x["away_goals"] == x["home_goals"] else 0), axis=1
-            )
-            away["win"] = (away["away_goals"] > away["home_goals"]).astype(int)
-            away["clean_sheet"] = (away["home_goals"] == 0).astype(int)
-            away["btts"] = ((away["home_goals"] > 0) & (away["away_goals"] > 0)).astype(int)
-            
-            team_matches = pd.concat([home, away]).sort_values("date", ascending=False)
+            # All matches - need to handle home/away separately for goals/points
+            # This part is a bit more complex, let's keep it simple but efficient
+            results = []
+            for _, row in team_matches.iterrows():
+                if row["home_team_id"] == team_id:
+                    scored = row["home_goals"]
+                    conceded = row["away_goals"]
+                    points = 3 if scored > conceded else (1 if scored == conceded else 0)
+                    win = 1 if scored > conceded else 0
+                    cs = 1 if conceded == 0 else 0
+                else:
+                    scored = row["away_goals"]
+                    conceded = row["home_goals"]
+                    points = 3 if scored > conceded else (1 if scored == conceded else 0)
+                    win = 1 if scored > conceded else 0
+                    cs = 1 if conceded == 0 else 0
+                
+                btts = 1 if row["home_goals"] > 0 and row["away_goals"] > 0 else 0
+                results.append({
+                    "goals_scored": scored,
+                    "goals_conceded": conceded,
+                    "points": points,
+                    "win": win,
+                    "clean_sheet": cs,
+                    "btts": btts,
+                    "date": row["date"]
+                })
+            team_matches = pd.DataFrame(results)
         
         # Take last N matches
         team_matches = team_matches.sort_values("date", ascending=False).head(n_matches)
@@ -375,17 +395,19 @@ class FeatureEngineer:
         if not league_stats:
             return 1.0, 1.0
         
-        df = self._matches_df[
-            (self._matches_df["league_id"] == league_id) & 
+        # Filter for team matches in this league before the date
+        team_matches = self._matches_df[
+            ((self._matches_df["home_team_id"] == team_id) | (self._matches_df["away_team_id"] == team_id)) &
+            (self._matches_df["league_id"] == league_id) &
             (self._matches_df["date"] < before_date)
         ]
         
-        # Get team's home matches
-        home_matches = df[df["home_team_id"] == team_id]
-        away_matches = df[df["away_team_id"] == team_id]
-        
-        if home_matches.empty and away_matches.empty:
+        if team_matches.empty:
             return 1.0, 1.0
+            
+        # Get team's home and away matches from the subset
+        home_matches = team_matches[team_matches["home_team_id"] == team_id]
+        away_matches = team_matches[team_matches["away_team_id"] == team_id]
         
         # Calculate team averages
         home_scored = home_matches["home_goals"].mean() if not home_matches.empty else 0

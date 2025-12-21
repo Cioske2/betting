@@ -768,17 +768,21 @@ async def train_models_background(settings):
         # Train Poisson model
         print("🎯 Training Poisson model...")
         logger.info("Training Poisson model...")
-        ensemble.fit_poisson(matches_df)
+        await asyncio.to_thread(ensemble.fit_poisson, matches_df)
+        
+        # Save models to disk (intermediate save after Poisson)
+        print("💾 Saving Poisson model to disk...")
+        save_models(ensemble, feature_eng)
         
         # Prepare features for XGBoost
         print("🔧 Preparing features for XGBoost...")
         logger.info("Preparing features for XGBoost...")
-        X, y = feature_eng.get_training_data(all_matches)
+        X, y = await asyncio.to_thread(feature_eng.get_training_data, all_matches)
         
         # Train XGBoost
         print("🚀 Training XGBoost model...")
         logger.info("Training XGBoost model...")
-        ensemble.fit_xgboost(X, y)
+        await asyncio.to_thread(ensemble.fit_xgboost, X, y)
         
         # Save models to disk
         print("💾 Saving models to disk...")
