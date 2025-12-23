@@ -25,6 +25,12 @@ class Settings(BaseSettings):
         description="API key for football-data.org (free, current season)"
     )
     
+    # The Odds API
+    the_odds_api_key: str = Field(
+        default="",
+        description="API key for the-odds-api.com"
+    )
+    
     # Supabase
     supabase_url: str = Field(default="", description="Supabase URL")
     supabase_key: str = Field(default="", description="Supabase API key")

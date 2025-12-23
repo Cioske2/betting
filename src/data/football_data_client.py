@@ -31,6 +31,10 @@ class FDMatch:
     status: str
     home_score: Optional[int] = None
     away_score: Optional[int] = None
+    # Betting odds (if available)
+    home_win_odds: Optional[float] = None
+    draw_odds: Optional[float] = None
+    away_win_odds: Optional[float] = None
 
 
 # Mapping from football-data.org competition codes to our league IDs
@@ -153,7 +157,10 @@ class FootballDataClient:
                     utc_date=datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00")),
                     status=m["status"],
                     home_score=m.get("score", {}).get("fullTime", {}).get("home"),
-                    away_score=m.get("score", {}).get("fullTime", {}).get("away")
+                    away_score=m.get("score", {}).get("fullTime", {}).get("away"),
+                    home_win_odds=m.get("odds", {}).get("homeWin"),
+                    draw_odds=m.get("odds", {}).get("draw"),
+                    away_win_odds=m.get("odds", {}).get("awayWin")
                 )
                 matches.append(match)
             except Exception as e:

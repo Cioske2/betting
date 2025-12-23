@@ -1,0 +1,120 @@
+import httpx
+import logging
+from typing import Dict, List, Optional, Any
+from ..config import get_settings
+
+logger = logging.getLogger(__name__)
+
+class OddsApiClient:
+    """
+    Client for The Odds API (https://the-odds-api.com/)
+    Provides real-time betting odds for various markets.
+    """
+    
+    BASE_URL = "https://api.the-odds-api.com/v4/sports"
+    
+    # Mapping our league IDs to The Odds API sport keys
+    SPORT_MAP = {
+        39: "soccer_uefa_champions_league", # Example, will use generic soccer keys
+        "premier_league": "soccer_england_league_1", # England League 1 is actually soccer_england_league_1? No, Premier League is soccer_england_premier_league
+        39: "soccer_england_premier_league",
+        140: "soccer_spain_la_liga",
+        135: "soccer_italy_serie_a",
+        78: "soccer_germany_bundesliga",
+        61: "soccer_france_ligue_1"
+    }
+
+    def __init__(self):
+        settings = get_settings()
+        self.api_key = settings.the_odds_api_key
+        if not self.api_key:
+            # Fallback if config.py hasn't been updated yet
+            import os
+            self.api_key = os.getenv("THE_ODDS_API_KEY")
+            
+        self.client = httpx.AsyncClient(timeout=15.0)
+
+    async def get_odds(self, sport_key: str, regions: str = "eu", markets: str = "h2h,totals,btts") -> List[Dict]:
+        """
+        Fetch odds for a specific sport and markets.
+        """
+        if not self.api_key:
+            logger.error("The Odds API key is missing")
+            return []
+
+        url = f"{self.BASE_URL}/{sport_key}/odds/"
+        params = {
+            "apiKey": self.api_key,
+            "regions": regions,
+            "markets": markets,
+            "oddsFormat": "decimal",
+            "dateFormat": "iso"
+        }
+        
+        try:
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Error fetching odds from The Odds API: {e}")
+            return []
+
+    async def get_all_league_odds(self, league_ids: List[int]) -> Dict[str, Any]:
+        """
+        Fetch and aggregate odds for multiple leagues.
+        Returns a dict mapping team names (normalized) to their odds.
+        """
+        all_odds = {}
+        for lid in league_ids:
+            sport_key = self.SPORT_MAP.get(lid)
+            if not sport_key:
+                continue
+            
+            odds_data = await self.get_odds(sport_key)
+            for match in odds_data:
+                # Key match by teams
+                home = match["home_team"]
+                away = match["away_team"]
+                match_id = f"{home}_vs_{away}".lower()
+                
+                match_odds = {
+                    "1x2": {},
+                    "ou_2.5": {},
+                    "btts": {}
+                }
+                
+                # Extract odds from bookmakers (using the first one available, usually a major one)
+                if match.get("bookmakers"):
+                    # Sort or pick a preferred bookie (e.g., Pinnacle or Bet365)
+                    # For now, just take the first one
+                    bm = match["bookmakers"][0]
+                    for market in bm["markets"]:
+                        if market["key"] == "h2h":
+                            for outcome in market["outcomes"]:
+                                if outcome["name"] == home: match_odds["1x2"]["1"] = outcome["price"]
+                                elif outcome["name"] == away: match_odds["1x2"]["2"] = outcome["price"]
+                                else: match_odds["1x2"]["X"] = outcome["price"]
+                        
+                        elif market["key"] == "totals":
+                            for outcome in market["outcomes"]:
+                                if outcome["point"] == 2.5:
+                                    if outcome["name"].lower() == "over": match_odds["ou_2.5"]["over"] = outcome["price"]
+                                    else: match_odds["ou_2.5"]["under"] = outcome["price"]
+                                    
+                        elif market["key"] == "btts":
+                            for outcome in market["outcomes"]:
+                                if outcome["name"].lower() == "yes": match_odds["btts"]["yes"] = outcome["price"]
+                                else: match_odds["btts"]["no"] = outcome["price"]
+                
+                all_odds[match_id] = match_odds
+                
+        return all_odds
+
+# Singleton
+_odds_api_client = None
+
+def get_odds_api_client():
+    global _odds_api_client
+    if _odds_api_client is None:
+        _odds_api_client = OddsApiClient()
+    return _odds_api_client

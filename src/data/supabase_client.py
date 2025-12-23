@@ -49,6 +49,21 @@ class SupabaseClient:
         self.client.table("bet_selections").insert(selection_data).execute()
         return bet_id
 
+    def get_all_bets(self, limit: int = 50) -> List[Dict]:
+        """
+        Fetches all bets with their associated selections.
+        """
+        if not self.client:
+            return []
+
+        # Fetch bets with nested selections
+        try:
+            res = self.client.table("bets").select("*, bet_selections(*)").order("id", desc=True).limit(limit).execute()
+            return res.data
+        except Exception as e:
+            logger.error(f"Error fetching bets: {e}")
+            return []
+
     def get_pending_selections(self) -> List[Dict]:
         if not self.client:
             return []

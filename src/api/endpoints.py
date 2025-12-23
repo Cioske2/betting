@@ -18,6 +18,7 @@ import logging
 from ..config import get_settings, LEAGUE_INFO
 from ..data.api_football_client import get_client, APIFootballClient, Match
 from ..data.football_data_client import get_fd_client, FDMatch
+from ..data.odds_api_client import get_odds_api_client
 from ..features.feature_engineering import FeatureEngineer, MatchFeatures
 from ..models.ensemble import EnsemblePredictor
 from ..betting.value_bet import ValueBetAnalyzer
@@ -401,11 +402,15 @@ async def get_upcoming_matches_with_predictions(
     Get upcoming matches with dynamic Poisson predictions and real-time odds for multiple leagues.
     """
     fd_client = get_fd_client()
+    odds_client = get_odds_api_client()
     ensemble = get_ensemble()
     
     try:
         sb = get_supabase_client()
         ids = [int(i.strip()) for i in league_ids.split(",") if i.strip()]
+        
+        # 1. Fetch real-time odds for all leagues upfront to minimize API calls
+        all_league_odds = await odds_client.get_all_league_odds(ids)
         
         # Determine current season
         from datetime import datetime
@@ -453,15 +458,35 @@ async def get_upcoming_matches_with_predictions(
                     
                     poisson_pred = ensemble.poisson.predict(f.home_team_id, home_l5, f.away_team_id, away_l5)
                     
-                    # Get Odds (If available from API-Football, try it since it's a different endpoint)
-                    # Use a safe try-except for odds
-                    odds_dict = {}
-                    try:
-                        # Maybe odds endpoint still works even if fixtures doesn't? Let's try.
-                        client = get_client()
-                        odds_dict = await client.get_odds(f.match_id) # Note: FD IDs != API-Football IDs usually, this might fail
-                    except:
-                        pass
+                    # 1. Start with DEFAULTS (FD.org for 1X2, Fair Odds for others)
+                    odds_1x2 = {
+                        "1": f.home_win_odds or 1.0,
+                        "X": f.draw_odds or 1.0,
+                        "2": f.away_win_odds or 1.0
+                    }
+                    
+                    margin = 0.93
+                    ou_odds = {
+                        "over": round((1.0 / max(0.01, poisson_pred.over_25_prob)) * margin, 2),
+                        "under": round((1.0 / max(0.01, poisson_pred.under_25_prob)) * margin, 2)
+                    }
+                    btts_odds = {
+                        "yes": round((1.0 / max(0.01, poisson_pred.btts_yes_prob)) * margin, 2),
+                        "no": round((1.0 / max(0.01, poisson_pred.btts_no_prob)) * margin, 2)
+                    }
+
+                    # 2. Try to fetch REAL odds from The Odds API
+                    # Key normalization: home_vs_away
+                    match_key = f"{f.home_team_name}_vs_{f.away_team_name}".lower()
+                    real_odds = all_league_odds.get(match_key)
+                    
+                    if real_odds:
+                        odds_1x2 = real_odds.get("1x2", odds_1x2)
+                        ou_odds = real_odds.get("ou_2.5", ou_odds)
+                        btts_odds = real_odds.get("btts", btts_odds)
+                        logger.info(f"Using REAL odds for {match_key}")
+                    else:
+                        logger.warning(f"No REAL odds for {match_key}, using FD.org/Fair Odds fallback")
                     
                     match_result = {
                         "fixture_id": f.match_id,
@@ -484,22 +509,26 @@ async def get_upcoming_matches_with_predictions(
                             }
                         },
                         "odds": {
-                            "1x2": odds_dict.get("1x2", {}),
-                            "ou_2.5": odds_dict.get("ou_2.5", {}),
-                            "dc": odds_dict.get("dc", {})
+                            "1x2": odds_1x2,
+                            "ou_2.5": ou_odds,
+                            "btts": btts_odds # Changed from 'dc' to 'btts' to match user request
                         },
                         "ev": {}
                     }
                     
-                    # Mock odds if missing so UI looks okay but EV stays 0
-                    if not match_result["odds"]["1x2"]:
-                        match_result["odds"]["1x2"] = {"1": 1.0, "X": 1.0, "2": 1.0}
-                    
                     # EV calculation
-                    if odds_dict.get("1x2"):
-                        o = odds_dict["1x2"]
-                        probs = {"1": prediction.home_win_pct / 100, "X": prediction.draw_pct / 100, "2": prediction.away_win_pct / 100}
-                        match_result["ev"] = {k: round(probs[k] * o[k], 2) for k in o if k in probs}
+                    match_result["ev"] = {
+                        # 1X2 EV
+                        "1": round((prediction.home_win_pct / 100) * odds_1x2.get("1", 0), 2),
+                        "X": round((prediction.draw_pct / 100) * odds_1x2.get("X", 0), 2),
+                        "2": round((prediction.away_win_pct / 100) * odds_1x2.get("2", 0), 2),
+                        # O/U EV
+                        "over_2.5": round(poisson_pred.over_25_prob * ou_odds.get("over", 0), 2),
+                        "under_2.5": round(poisson_pred.under_25_prob * ou_odds.get("under", 0), 2),
+                        # BTTS EV
+                        "btts_yes": round(poisson_pred.btts_yes_prob * btts_odds.get("yes", 0), 2),
+                        "btts_no": round(poisson_pred.btts_no_prob * btts_odds.get("no", 0), 2)
+                    }
 
                     all_matches.append(match_result)
                 except Exception as fixture_error:
@@ -544,6 +573,19 @@ async def place_bet(request: PlaceBetRequest):
         return {"status": "success", "bet_id": bet_id, "potential_win": round(potential_win, 2)}
     except Exception as e:
         logger.error(f"Failed to place bet: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/bets", tags=["Betting"])
+async def get_bets(limit: int = 50):
+    """
+    Get betting history from Supabase.
+    """
+    try:
+        sb = get_supabase_client()
+        bets = sb.get_all_bets(limit=limit)
+        return {"bets": bets}
+    except Exception as e:
+        logger.error(f"Failed to fetch bets: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/bets/sync", tags=["Betting"])
