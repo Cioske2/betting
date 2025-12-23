@@ -194,13 +194,15 @@ class FootballDataClient:
     async def get_upcoming_matches(
         self,
         league_id: int,
-        limit: int = 10
+        days_ahead: int = 7,
+        limit: int = 50
     ) -> List[FDMatch]:
         """
-        Get upcoming scheduled matches.
+        Get upcoming scheduled matches for the next N days.
         
         Args:
             league_id: Our internal league ID
+            days_ahead: Number of days to look ahead
             limit: Max matches to return
             
         Returns:
@@ -210,10 +212,38 @@ class FootballDataClient:
         if not competition_code:
             return []
         
-        matches = await self.get_matches(
-            competition_code=competition_code,
-            status="SCHEDULED"
-        )
+        from datetime import date, timedelta
+        today = date.today()
+        future = today + timedelta(days=days_ahead)
+        
+        params = {
+            "dateFrom": today.isoformat(),
+            "dateTo": future.isoformat(),
+            "status": "SCHEDULED"
+        }
+        
+        data = await self._request(f"competitions/{competition_code}/matches", params)
+        matches = []
+        
+        for m in data.get("matches", []):
+            try:
+                match = FDMatch(
+                    match_id=m["id"],
+                    competition_id=league_id,
+                    competition_name=m.get("competition", {}).get("name", "Unknown"),
+                    home_team_id=m["homeTeam"]["id"],
+                    home_team_name=m["homeTeam"]["name"],
+                    away_team_id=m["awayTeam"]["id"],
+                    away_team_name=m["awayTeam"]["name"],
+                    utc_date=datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00")),
+                    status=m["status"],
+                    home_score=m.get("score", {}).get("fullTime", {}).get("home"),
+                    away_score=m.get("score", {}).get("fullTime", {}).get("away")
+                )
+                matches.append(match)
+            except Exception as e:
+                logger.warning(f"Failed to parse upcoming match: {e}")
+                continue
         
         # Sort by date ascending (nearest first)
         matches.sort(key=lambda x: x.utc_date)
