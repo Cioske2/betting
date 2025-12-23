@@ -58,6 +58,14 @@ class PoissonModel:
         self.max_goals = max_goals
         self._is_fitted = True  # Dynamic model doesn't need traditional fitting
 
+    def fit(self, matches_df: any) -> None:
+        """
+        Placeholder fit method for training pipeline compatibility.
+        The dynamic model calculates strengths on the fly.
+        """
+        logger.info("PoissonModel: Dynamic model used, skipping global fit.")
+        pass
+
     def calculate_team_strength(self, team_id: int, last_5_matches: List[Dict]) -> Dict[str, float]:
         """
         Calculates: Media Goal Fatti e Media Goal Subiti nelle ultime 5 partite.
