@@ -5,6 +5,17 @@ from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
+def normalize_team(name: str) -> str:
+    """Standardize team names for cross-API matching."""
+    suffixes = [" FC", " AFC", " CF", " SC", " AS", " SSC", " RC", " UD", " SD", " CD", " FK", " BK"]
+    name = name.upper()
+    for s in suffixes:
+        name = name.replace(s, "")
+    # Remove common variations
+    name = name.replace("& HOVE ALBION", "") # Brighton
+    name = name.replace(" ST GERMAIN", "")    # PSG
+    return name.strip().lower()
+
 class OddsApiClient:
     """
     Client for The Odds API (https://the-odds-api.com/)
@@ -54,7 +65,9 @@ class OddsApiClient:
         try:
             response = await self.client.get(url, params=params)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            logger.info(f"The Odds API: Found {len(data)} matches for {sport_key}")
+            return data
         except Exception as e:
             logger.error(f"Error fetching odds from The Odds API: {e}")
             return []
@@ -72,10 +85,10 @@ class OddsApiClient:
             
             odds_data = await self.get_odds(sport_key)
             for match in odds_data:
-                # Key match by teams
-                home = match["home_team"]
-                away = match["away_team"]
-                match_id = f"{home}_vs_{away}".lower()
+                # Key match by normalized teams
+                home_norm = normalize_team(match["home_team"])
+                away_norm = normalize_team(match["away_team"])
+                match_id = f"{home_norm}_vs_{away_norm}".lower()
                 
                 match_odds = {
                     "1x2": {},
@@ -83,30 +96,38 @@ class OddsApiClient:
                     "btts": {}
                 }
                 
-                # Extract odds from bookmakers (using the first one available, usually a major one)
+                # Extract odds from bookmakers
                 if match.get("bookmakers"):
-                    # Sort or pick a preferred bookie (e.g., Pinnacle or Bet365)
-                    # For now, just take the first one
-                    bm = match["bookmakers"][0]
-                    for market in bm["markets"]:
-                        if market["key"] == "h2h":
-                            for outcome in market["outcomes"]:
-                                if outcome["name"] == home: match_odds["1x2"]["1"] = outcome["price"]
-                                elif outcome["name"] == away: match_odds["1x2"]["2"] = outcome["price"]
-                                else: match_odds["1x2"]["X"] = outcome["price"]
+                    # Prioritize some bookmakers if available (e.g., Pinnacle, Bet365, Betfair)
+                    # For now, we'll just use the first one but ensure it has the markets
+                    for bm in match["bookmakers"]:
+                        found_markets = [m["key"] for m in bm["markets"]]
                         
-                        elif market["key"] == "totals":
-                            for outcome in market["outcomes"]:
-                                if outcome["point"] == 2.5:
-                                    if outcome["name"].lower() == "over": match_odds["ou_2.5"]["over"] = outcome["price"]
-                                    else: match_odds["ou_2.5"]["under"] = outcome["price"]
-                                    
-                        elif market["key"] == "btts":
-                            for outcome in market["outcomes"]:
-                                if outcome["name"].lower() == "yes": match_odds["btts"]["yes"] = outcome["price"]
-                                else: match_odds["btts"]["no"] = outcome["price"]
+                        for market in bm["markets"]:
+                            if market["key"] == "h2h" and not match_odds["1x2"]:
+                                for outcome in market["outcomes"]:
+                                    o_name = outcome["name"].lower()
+                                    if o_name == match["home_team"].lower(): match_odds["1x2"]["1"] = outcome["price"]
+                                    elif o_name == match["away_team"].lower(): match_odds["1x2"]["2"] = outcome["price"]
+                                    elif "draw" in o_name or o_name == "x": match_odds["1x2"]["X"] = outcome["price"]
+                            
+                            elif market["key"] == "totals" and not match_odds["ou_2.5"]:
+                                for outcome in market["outcomes"]:
+                                    if outcome.get("point") == 2.5:
+                                        if outcome["name"].lower() == "over": match_odds["ou_2.5"]["over"] = outcome["price"]
+                                        else: match_odds["ou_2.5"]["under"] = outcome["price"]
+                                        
+                            elif market["key"] == "btts" and not match_odds["btts"]:
+                                for outcome in market["outcomes"]:
+                                    if outcome["name"].lower() == "yes": match_odds["btts"]["yes"] = outcome["price"]
+                                    else: match_odds["btts"]["no"] = outcome["price"]
+                        
+                        # If we found at least H2H, we can stop searching bookies
+                        if match_odds["1x2"]:
+                            break
                 
                 all_odds[match_id] = match_odds
+                logger.info(f"Loaded REAL odds for {match_id}")
                 
         return all_odds
 

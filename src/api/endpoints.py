@@ -18,7 +18,7 @@ import logging
 from ..config import get_settings, LEAGUE_INFO
 from ..data.api_football_client import get_client, APIFootballClient, Match
 from ..data.football_data_client import get_fd_client, FDMatch
-from ..data.odds_api_client import get_odds_api_client
+from ..data.odds_api_client import get_odds_api_client, normalize_team
 from ..features.feature_engineering import FeatureEngineer, MatchFeatures
 from ..models.ensemble import EnsemblePredictor
 from ..betting.value_bet import ValueBetAnalyzer
@@ -477,14 +477,17 @@ async def get_upcoming_matches_with_predictions(
 
                     # 2. Try to fetch REAL odds from The Odds API
                     # Key normalization: home_vs_away
-                    match_key = f"{f.home_team_name}_vs_{f.away_team_name}".lower()
+                    h_norm = normalize_team(f.home_team_name)
+                    a_norm = normalize_team(f.away_team_name)
+                    match_key = f"{h_norm}_vs_{a_norm}"
                     real_odds = all_league_odds.get(match_key)
                     
                     if real_odds:
-                        odds_1x2 = real_odds.get("1x2", odds_1x2)
-                        ou_odds = real_odds.get("ou_2.5", ou_odds)
-                        btts_odds = real_odds.get("btts", btts_odds)
-                        logger.info(f"Using REAL odds for {match_key}")
+                        # Only overwrite if real odds for that market are actually found
+                        if real_odds.get("1x2"): odds_1x2 = real_odds["1x2"]
+                        if real_odds.get("ou_2.5"): ou_odds = real_odds["ou_2.5"]
+                        if real_odds.get("btts"): btts_odds = real_odds["btts"]
+                        logger.info(f"Using REAL odds for {match_key} ({f.home_team_name} vs {f.away_team_name})")
                     else:
                         logger.warning(f"No REAL odds for {match_key}, using FD.org/Fair Odds fallback")
                     
