@@ -21,6 +21,7 @@ from ..data.football_data_client import get_fd_client, FDMatch
 from ..features.feature_engineering import FeatureEngineer, MatchFeatures
 from ..models.ensemble import EnsemblePredictor
 from ..betting.value_bet import ValueBetAnalyzer
+from ..data.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -389,6 +390,185 @@ async def analyze_value_bet(request: ValueBetRequest):
         recommendation=result["recommendation"],
         total_edge_percent=result["total_edge_percent"]
     )
+
+
+@router.get("/upcoming-matches", tags=["Data"])
+async def get_upcoming_matches_with_predictions(
+    league_ids: str = Query(default="39", description="Comma-separated League IDs"),
+    days: int = Query(default=2, ge=1, le=14, description="Days ahead")
+):
+    """
+    Get upcoming matches with dynamic Poisson predictions and real-time odds for multiple leagues.
+    """
+    client = get_client()
+    ensemble = get_ensemble()
+    
+    try:
+        sb = get_supabase_client()
+        ids = [int(i.strip()) for i in league_ids.split(",") if i.strip()]
+        
+        all_matches = []
+        for lid in ids:
+            # 1. Get upcoming fixtures
+            fixtures = await client.get_upcoming_fixtures(league_id=lid, days_ahead=days)
+            
+            # 2. Get finished matches for team strength
+            from datetime import datetime
+            current_year = datetime.now().year
+            season = current_year if datetime.now().month >= 8 else current_year - 1
+            finished_matches = await client.get_finished_matches(league_id=lid, season=season)
+            
+            for f in fixtures:
+                try:
+                    # Get/Calculate stats
+                    for tid, tname in [(f.home_team_id, f.home_team_name), (f.away_team_id, f.away_team_name)]:
+                        cached = sb.get_team_stats(tid)
+                        if not cached:
+                            last_5 = [m.__dict__ for m in finished_matches if m.home_team_id == tid or m.away_team_id == tid][:5]
+                            stats = ensemble.poisson.calculate_team_strength(tid, last_5)
+                            sb.update_team_stats(tid, tname, stats)
+                    
+                    # Get Odds
+                    odds_dict = await client.get_odds(f.fixture_id)
+                    
+                    # Predictions
+                    home_l5 = [m.__dict__ for m in finished_matches if m.home_team_id == f.home_team_id or m.away_team_id == f.home_team_id][:5]
+                    away_l5 = [m.__dict__ for m in finished_matches if m.home_team_id == f.away_team_id or m.away_team_id == f.away_team_id][:5]
+                    
+                    # Using ensemble.predict which handles everything
+                    prediction = ensemble.predict(
+                        home_team_id=f.home_team_id,
+                        away_team_id=f.away_team_id,
+                        home_team_name=f.home_team_name,
+                        away_team_name=f.away_team_name,
+                        league_id=lid,
+                        home_last_5=home_l5,
+                        away_last_5=away_l5
+                    )
+                    
+                    poisson_pred = ensemble.poisson.predict(f.home_team_id, home_l5, f.away_team_id, away_l5)
+                    
+                    match_result = {
+                        "fixture_id": f.fixture_id,
+                        "teams": {"home": f.home_team_name, "away": f.away_team_name},
+                        "date": f.date.isoformat() if hasattr(f.date, 'isoformat') else f.date,
+                        "league_id": lid,
+                        "predictions": {
+                            "1x2": {
+                                "1": round(prediction.home_win_pct / 100, 4),
+                                "X": round(prediction.draw_pct / 100, 4),
+                                "2": round(prediction.away_win_pct / 100, 4)
+                            },
+                            "goals": {
+                                "over_2.5": round(poisson_pred.over_25_prob, 4),
+                                "under_2.5": round(poisson_pred.under_25_prob, 4)
+                            },
+                            "btts": {
+                                "yes": round(poisson_pred.btts_yes_prob, 4),
+                                "no": round(poisson_pred.btts_no_prob, 4)
+                            }
+                        },
+                        "odds": {
+                            "1x2": odds_dict.get("1x2", {}),
+                            "ou_2.5": odds_dict.get("ou_2.5", {}),
+                            "dc": odds_dict.get("dc", {})
+                        },
+                        "ev": {}
+                    }
+                    
+                    # EV calculation
+                    if "1x2" in odds_dict:
+                        o = odds_dict["1x2"]
+                        probs = {"1": prediction.home_win_pct / 100, "X": prediction.draw_pct / 100, "2": prediction.away_win_pct / 100}
+                        match_result["ev"] = {k: round(probs[k] * o[k], 2) for k in o if k in probs}
+
+                    all_matches.append(match_result)
+                except Exception as fixture_error:
+                    logger.error(f"Error processing fixture {f.fixture_id}: {fixture_error}")
+                    continue
+        
+        return {"matches": all_matches}
+    except Exception as e:
+        logger.error(f"Failed to fetch upcoming matches: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+class BetSelection(BaseModel):
+    fixture_id: int
+    selection: str
+    odds: float
+    market: str = "Match Winner"
+
+class PlaceBetRequest(BaseModel):
+    stake: float
+    selections: List[BetSelection]
+
+@router.post("/bets/place", tags=["Betting"])
+async def place_bet(request: PlaceBetRequest):
+    """
+    Save a new bet to Supabase.
+    """
+    try:
+        sb = get_supabase_client()
+        total_odds = 1.0
+        for s in request.selections:
+            total_odds *= s.odds
+        
+        potential_win = request.stake * total_odds
+        
+        bet_id = sb.save_bet(
+            stake=request.stake,
+            total_odds=total_odds,
+            potential_win=potential_win,
+            selections=[s.model_dump() for s in request.selections]
+        )
+        
+        return {"status": "success", "bet_id": bet_id, "potential_win": round(potential_win, 2)}
+    except Exception as e:
+        logger.error(f"Failed to place bet: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/bets/sync", tags=["Betting"])
+async def sync_bet_results():
+    """
+    Sync pending bet results from API-Football.
+    """
+    try:
+        sb = get_supabase_client()
+        client = get_client()
+        
+        pending = sb.get_pending_selections()
+        if not pending:
+            return {"status": "success", "message": "No pending bets to sync"}
+            
+        fixture_ids = list(set([p["fixture_id"] for p in pending]))
+        fixtures_data = await client._request("fixtures", {"ids": "-".join(map(str, fixture_ids))})
+        fixtures_map = {f["fixture"]["id"]: f for f in fixtures_data.get("response", [])}
+        
+        updated_count = 0
+        for p in pending:
+            f = fixtures_map.get(p["fixture_id"])
+            if not f or f["fixture"]["status"]["short"] != "FT":
+                continue
+                
+            home_goals = f["goals"]["home"]
+            away_goals = f["goals"]["away"]
+            
+            winner = "1" if home_goals > away_goals else ("2" if home_goals < away_goals else "X")
+            
+            sel = p["selection"]
+            status = "lost"
+            if (sel in ["Home", "1"] and winner == "1") or \
+               (sel in ["Draw", "X"] and winner == "X") or \
+               (sel in ["Away", "2"] and winner == "2"):
+                status = "won"
+            
+            sb.update_selection_result(p["id"], status, status, f"{home_goals}-{away_goals}")
+            updated_count += 1
+            
+        return {"status": "success", "updated_selections": updated_count}
+    except Exception as e:
+        logger.error(f"Failed to sync results: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/fixtures/upcoming", tags=["Data"])

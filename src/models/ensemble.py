@@ -191,21 +191,12 @@ class EnsemblePredictor:
         home_team_name: str,
         away_team_name: str,
         league_id: int,
-        features: Optional[MatchFeatures] = None
+        features: Optional[MatchFeatures] = None,
+        home_last_5: Optional[List[Dict]] = None,
+        away_last_5: Optional[List[Dict]] = None
     ) -> EnsemblePrediction:
         """
         Generate ensemble prediction for a match.
-        
-        Args:
-            home_team_id: Home team ID
-            away_team_id: Away team ID
-            home_team_name: Home team name
-            away_team_name: Away team name
-            league_id: League ID
-            features: Pre-calculated match features for XGBoost
-            
-        Returns:
-            EnsemblePrediction with combined probabilities
         """
         poisson_probs = {"1": 0.33, "X": 0.33, "2": 0.34}
         xgb_probs = {"1": 0.33, "X": 0.33, "2": 0.34}
@@ -213,16 +204,18 @@ class EnsemblePredictor:
         expected_away = 1.2
         
         # Get Poisson prediction
-        if self.poisson.is_fitted:
-            try:
-                poisson_pred = self.poisson.predict(
-                    home_team_id, away_team_id, league_id
-                )
-                poisson_probs = poisson_pred.to_dict()
-                expected_home = poisson_pred.expected_home_goals
-                expected_away = poisson_pred.expected_away_goals
-            except Exception as e:
-                logger.warning(f"Poisson prediction failed: {e}")
+        try:
+            # Poisson now requires last 5 matches
+            poisson_pred = self.poisson.predict(
+                home_team_id, home_last_5 or [],
+                away_team_id, away_last_5 or []
+            )
+            data = poisson_pred.to_dict()
+            poisson_probs = data["1x2"]
+            expected_home = data["expected_goals"]["home"]
+            expected_away = data["expected_goals"]["away"]
+        except Exception as e:
+            logger.warning(f"Poisson prediction failed: {e}")
         
         # Get XGBoost prediction
         if self.xgboost.is_fitted and features is not None:

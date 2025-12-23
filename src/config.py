@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         description="API key for football-data.org (free, current season)"
     )
     
+    # Supabase
+    supabase_url: str = Field(default="", description="Supabase URL")
+    supabase_key: str = Field(default="", description="Supabase API key")
+    
     # League IDs for API-Football
     # 39=Premier League, 140=La Liga, 135=Serie A, 78=Bundesliga, 61=Ligue 1
     leagues: str = Field(

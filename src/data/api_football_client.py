@@ -393,43 +393,50 @@ class APIFootballClient:
         self,
         fixture_id: int,
         bookmaker_id: Optional[int] = None
-    ) -> List[Odds]:
+    ) -> Dict[str, Any]:
         """
-        Get betting odds for a fixture.
-        
-        Args:
-            fixture_id: Fixture ID
-            bookmaker_id: Optional specific bookmaker (default: all)
-            
-        Returns:
-            List of Odds objects
+        Get betting odds for a fixture across multiple markets.
         """
         params = {"fixture": fixture_id}
         if bookmaker_id:
             params["bookmaker"] = bookmaker_id
             
         data = await self._request("odds", params)
-        odds_list = []
+        all_odds = {}
         
         for response in data.get("response", []):
             for bookmaker in response.get("bookmakers", []):
+                # We prioritize the requested bookmaker or the first one found
+                if bookmaker_id and bookmaker["id"] != bookmaker_id:
+                    continue
+                
                 for bet in bookmaker.get("bets", []):
                     # Match Winner (bet id 1)
                     if bet.get("id") == 1:
                         values = {v["value"]: float(v["odd"]) for v in bet.get("values", [])}
-                        
                         if "Home" in values and "Draw" in values and "Away" in values:
-                            odds = Odds(
-                                fixture_id=fixture_id,
-                                bookmaker=bookmaker.get("name", "Unknown"),
-                                home_win=values["Home"],
-                                draw=values["Draw"],
-                                away_win=values["Away"],
-                                updated_at=datetime.now()
-                            )
-                            odds_list.append(odds)
+                            all_odds["1x2"] = {"1": values["Home"], "X": values["Draw"], "2": values["Away"]}
+                    
+                    # Goals Over/Under (bet id 5)
+                    elif bet.get("id") == 5:
+                        for v in bet.get("values", []):
+                            if v["value"] == "Over 2.5":
+                                all_odds["ou_2.5"] = all_odds.get("ou_2.5", {})
+                                all_odds["ou_2.5"]["over"] = float(v["odd"])
+                            elif v["value"] == "Under 2.5":
+                                all_odds["ou_2.5"] = all_odds.get("ou_2.5", {})
+                                all_odds["ou_2.5"]["under"] = float(v["odd"])
+                                
+                    # Double Chance (bet id 12)
+                    elif bet.get("id") == 12:
+                        values = {v["value"]: float(v["odd"]) for v in bet.get("values", [])}
+                        all_odds["dc"] = values
+                
+                # If we found odds for this bookmaker, we stop (or continue if we want merge)
+                if all_odds:
+                    break
                             
-        return odds_list
+        return all_odds
     
     async def get_standings(
         self,
