@@ -7,13 +7,83 @@ logger = logging.getLogger(__name__)
 
 def normalize_team(name: str) -> str:
     """Standardize team names for cross-API matching."""
-    suffixes = [" FC", " AFC", " CF", " SC", " AS", " SSC", " RC", " UD", " SD", " CD", " FK", " BK"]
-    name = name.upper()
-    for s in suffixes:
+    # 1. Basic cleanup
+    name = name.upper().strip()
+    
+    # 2. Known aliases map (FD.org -> The Odds API / Generic simplifications)
+    aliases = {
+        "PARMA CALCIO 1913": "PARMA",
+        "ACF FIORENTINA": "FIORENTINA",
+        "US LECCE": "LECCE",
+        "SS LAZIO": "LAZIO",
+        "FC INTERNAZIONALE MILANO": "INTER MILAN",
+        "INTERNAZIONALE": "INTER MILAN",
+        "AC PISA 1909": "PISA",
+        "US CREMONESE": "CREMONESE",
+        "BOLOGNA FC 1909": "BOLOGNA",
+        "US SASSUOLO CALCIO": "SASSUOLO",
+        "ATALANTA BC": "ATALANTA",
+        "SSC NAPOLI": "NAPOLI",
+        "TORINO FC": "TORINO",
+        "HELLAS VERONA FC": "HELLAS VERONA",
+        "UDINESE CALCIO": "UDINESE",
+        "CAGLIARI CALCIO": "CAGLIARI",
+        "AC MONZA": "MONZA",
+        "GENOA CFC": "GENOA",
+        "COMO 1907": "COMO",
+        "BRIGHTON & HOVE ALBION": "BRIGHTON",
+        "BRIGHTON AND HOVE ALBION": "BRIGHTON",
+        "WEST HAM UNITED FC": "WEST HAM UNITED",
+        "TOTTENHAM HOTSPUR FC": "TOTTENHAM HOTSPUR",
+        "NEWCASTLE UNITED FC": "NEWCASTLE UNITED",
+        "LEICESTER CITY FC": "LEICESTER CITY",
+        "WOLVERHAMPTON WANDERERS FC": "WOLVERHAMPTON WANDERERS",
+        # Ligue 1
+        "PARIS SAINT-GERMAIN FC": "PSG",
+        "PARIS SG": "PSG",
+        "AS MONACO FC": "MONACO",
+        "OLYMPIQUE DE MARSEILLE": "MARSEILLE",
+        "OLYMPIQUE LYONNAIS": "LYON",
+        "LILLE OSC": "LILLE",
+        # Bundesliga
+        "BAYER 04 LEVERKUSEN": "BAYER LEVERKUSEN",
+        "RB LEIPZIG": "RB LEIPZIG",
+        "FC BAYERN MUNCHEN": "BAYERN MUNICH",
+        "BORUSSIA DORTMUND": "DORTMUND",
+        "VFB STUTTGART": "STUTTGART",
+        "EINTRACHT FRANKFURT": "FRANKFURT",
+        "VFL WOLFSBURG": "WOLFSBURG",
+        "TSG 1899 HOFFENHEIM": "HOFFENHEIM",
+        "1. FSV MAINZ 05": "MAINZ",
+        "FC AUGSBURG": "AUGSBURG",
+        # La Liga
+        "CLUB ATHLETICO DE MADRID": "ATLETICO MADRID",
+        "CA OSASUNA": "OSASUNA",
+        "SEVILLA FC": "SEVILLA",
+        "REAL BETIS BALOMPIE": "REAL BETIS",
+        "REAL SOCIEDAD DE FUTBOL": "REAL SOCIEDAD",
+        "VILLARREAL CF": "VILLARREAL",
+        "ATHLETIC CLUB": "ATHLETIC BILBAO",
+        "VALENCIA CF": "VALENCIA",
+        "GETAFE CF": "GETAFE",
+        "RCD MALLORCA": "MALLORCA"
+    }
+    
+    if name in aliases:
+        return aliases[name].lower()
+        
+    # 3. Dynamic cleanup if not an exact match alias
+    # Remove common prefixes/suffixes
+    remove_list = [
+        " FC", " AFC", " CF", " SC", " AS", " SSC", " RC", " UD", " SD", " CD", " FK", " BK", 
+        " BC", " AC", " US", " CALCIO", " 1913", " 1909", " 1907"
+    ]
+    
+    for s in remove_list:
         name = name.replace(s, "")
-    # Remove common variations
-    name = name.replace("& HOVE ALBION", "") # Brighton
-    name = name.replace(" ST GERMAIN", "")    # PSG
+        
+    name = name.replace("&", "AND")
+        
     return name.strip().lower()
 
 class OddsApiClient:
@@ -30,7 +100,7 @@ class OddsApiClient:
         140: "soccer_spain_la_liga",
         135: "soccer_italy_serie_a",
         78: "soccer_germany_bundesliga",
-        61: "soccer_france_ligue_1"
+        61: "soccer_france_ligue_one"
     }
 
     def __init__(self):
@@ -43,7 +113,7 @@ class OddsApiClient:
             
         self.client = httpx.AsyncClient(timeout=15.0)
 
-    async def get_odds(self, sport_key: str, regions: str = "eu", markets: str = "h2h,totals,btts") -> List[Dict]:
+    async def get_odds(self, sport_key: str, regions: str = "eu", markets: str = "h2h,totals") -> List[Dict]:
         """
         Fetch odds for a specific sport and markets.
         """
@@ -68,6 +138,8 @@ class OddsApiClient:
             return data
         except Exception as e:
             logger.error(f"Error fetching odds from The Odds API: {e}")
+            if 'response' in locals():
+                 logger.error(f"Response Body: {response.text}")
             return []
 
     async def get_all_league_odds(self, league_ids: List[int]) -> Dict[str, Any]:
