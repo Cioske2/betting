@@ -26,9 +26,7 @@ class OddsApiClient:
     
     # Mapping our league IDs to The Odds API sport keys
     SPORT_MAP = {
-        39: "soccer_uefa_champions_league", # Example, will use generic soccer keys
-        "premier_league": "soccer_england_league_1", # England League 1 is actually soccer_england_league_1? No, Premier League is soccer_england_premier_league
-        39: "soccer_england_premier_league",
+        39: "soccer_epl",
         140: "soccer_spain_la_liga",
         135: "soccer_italy_serie_a",
         78: "soccer_germany_bundesliga",
