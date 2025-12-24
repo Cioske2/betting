@@ -43,6 +43,8 @@ class SupabaseClient:
                 "market": sel["market"],
                 "selection": sel["selection"],
                 "odds": sel["odds"],
+                "home_team": sel.get("home_team"),
+                "away_team": sel.get("away_team"),
                 "status": "pending"
             })
         

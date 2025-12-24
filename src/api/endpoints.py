@@ -428,6 +428,9 @@ async def get_upcoming_matches_with_predictions(
             # 2. Get finished matches for team strength from Football-Data.org
             finished_matches = await fd_client.get_finished_matches(league_id=lid, season=season)
             
+            # 3. Get current standings
+            standings = await fd_client.get_standings(league_id=lid, season=season)
+            
             # Convert FDMatch to dict for Poisson model
             history_dicts = []
             for m in finished_matches:
@@ -455,6 +458,10 @@ async def get_upcoming_matches_with_predictions(
                         home_last_5=home_l5,
                         away_last_5=away_l5
                     )
+                    
+                    # Get ranks from standings
+                    home_rank = next((s["rank"] for s in standings if s["team_id"] == f.home_team_id), None)
+                    away_rank = next((s["rank"] for s in standings if s["team_id"] == f.away_team_id), None)
                     
                     poisson_pred = ensemble.poisson.predict(f.home_team_id, home_l5, f.away_team_id, away_l5)
                     
@@ -493,7 +500,14 @@ async def get_upcoming_matches_with_predictions(
                     
                     match_result = {
                         "fixture_id": f.match_id,
-                        "teams": {"home": f.home_team_name, "away": f.away_team_name},
+                        "teams": {
+                            "home": f.home_team_name, 
+                            "away": f.away_team_name,
+                            "home_elo": round(prediction.home_elo, 1) if prediction.home_elo else None,
+                            "away_elo": round(prediction.away_elo, 1) if prediction.away_elo else None,
+                            "home_rank": home_rank,
+                            "away_rank": away_rank
+                        },
                         "date": f.utc_date.isoformat() if hasattr(f.utc_date, 'isoformat') else f.utc_date,
                         "league_id": lid,
                         "predictions": {
@@ -548,6 +562,8 @@ class BetSelection(BaseModel):
     selection: str
     odds: float
     market: str = "Match Winner"
+    home_team: Optional[str] = None
+    away_team: Optional[str] = None
 
 class PlaceBetRequest(BaseModel):
     stake: float

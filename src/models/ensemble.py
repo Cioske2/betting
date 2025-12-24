@@ -49,6 +49,12 @@ class EnsemblePrediction:
     # Most likely outcome
     predicted_outcome: str  # "1", "X", "2"
     
+    # ELO and Standings
+    home_elo: Optional[float] = None
+    away_elo: Optional[float] = None
+    home_rank: Optional[int] = None
+    away_rank: Optional[int] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to API response format."""
         return {
@@ -56,6 +62,10 @@ class EnsemblePrediction:
                 "home_team": self.home_team,
                 "away_team": self.away_team,
                 "league_id": self.league_id,
+                "home_elo": round(self.home_elo, 1) if self.home_elo else None,
+                "away_elo": round(self.away_elo, 1) if self.away_elo else None,
+                "home_rank": self.home_rank,
+                "away_rank": self.away_rank,
             },
             "probabilities": {
                 "home_win": round(self.home_win_pct, 2),
@@ -243,6 +253,14 @@ class EnsemblePredictor:
         # Calculate confidence
         confidence = self._calculate_confidence(poisson_probs, xgb_probs, final_probs)
         
+        # Extract ELO and Rank from features if available
+        home_elo = features.home_elo if features else None
+        away_elo = features.away_elo if features else None
+        
+        # Rank is tricky because position_diff = away_pos - home_pos
+        # We don't have absolute ranks in features, but we can pass them if available
+        # For now, let's just use ELO which we definitely have in features
+        
         return EnsemblePrediction(
             home_team=home_team_name,
             away_team=away_team_name,
@@ -257,6 +275,8 @@ class EnsemblePredictor:
             confidence=confidence,
             prediction_time=datetime.now(),
             predicted_outcome=predicted_outcome,
+            home_elo=home_elo,
+            away_elo=away_elo
         )
     
     def predict_from_features(

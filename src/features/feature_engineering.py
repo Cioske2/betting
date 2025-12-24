@@ -73,6 +73,10 @@ class MatchFeatures:
     # League position difference (if available)
     position_diff: int = 0
     
+    # ELO Ratings
+    home_elo: float = 1500.0
+    away_elo: float = 1500.0
+    
     def to_dict(self) -> Dict:
         """Convert to dictionary for DataFrame creation."""
         return {
@@ -108,6 +112,8 @@ class MatchFeatures:
             "home_btts_rate": self.home_btts_rate,
             "away_btts_rate": self.away_btts_rate,
             "position_diff": self.position_diff,
+            "home_elo": self.home_elo,
+            "away_elo": self.away_elo,
         }
     
     def to_feature_vector(self) -> List[float]:
@@ -144,6 +150,8 @@ class MatchFeatures:
             self.home_btts_rate,
             self.away_btts_rate,
             self.position_diff,
+            self.home_elo,
+            self.away_elo,
         ]
     
     @staticmethod
@@ -178,6 +186,8 @@ class MatchFeatures:
             "home_btts_rate",
             "away_btts_rate",
             "position_diff",
+            "home_elo",
+            "away_elo",
         ]
 
 
@@ -192,16 +202,22 @@ class FeatureEngineer:
     - Generate feature vectors for model input
     """
     
-    def __init__(self, form_matches: int = 5):
+    def __init__(self, form_matches: int = 5, decay_factor: float = 0.9):
         """
         Initialize the feature engineer.
         
         Args:
             form_matches: Number of recent matches to use for form calculation
+            decay_factor: Factor for time-decay weighting (0-1). 
+                         1.0 means no decay, lower means older matches count less.
         """
         self.form_matches = form_matches
+        self.decay_factor = decay_factor
         self._matches_df: Optional[pd.DataFrame] = None
         self._league_stats: Dict[int, Dict] = {}
+        self._elo_ratings: Dict[int, float] = {}  # team_id -> rating
+        self._elo_k_factor = 32
+        self._elo_home_advantage = 50
     
     def load_matches(self, matches: List[Match]) -> None:
         """
@@ -212,17 +228,24 @@ class FeatureEngineer:
         """
         data = []
         for m in matches:
-            if m.home_goals is not None and m.away_goals is not None:
+            # Handle both Match and FDMatch objects
+            home_goals = getattr(m, 'home_goals', getattr(m, 'home_score', None))
+            away_goals = getattr(m, 'away_goals', getattr(m, 'away_score', None))
+            fixture_id = getattr(m, 'fixture_id', getattr(m, 'match_id', None))
+            league_id = getattr(m, 'league_id', getattr(m, 'competition_id', None))
+            date = getattr(m, 'date', getattr(m, 'utc_date', None))
+            
+            if home_goals is not None and away_goals is not None:
                 data.append({
-                    "fixture_id": m.fixture_id,
-                    "league_id": m.league_id,
-                    "date": m.date,
+                    "fixture_id": fixture_id,
+                    "league_id": league_id,
+                    "date": date,
                     "home_team_id": m.home_team_id,
                     "home_team_name": m.home_team_name,
                     "away_team_id": m.away_team_id,
                     "away_team_name": m.away_team_name,
-                    "home_goals": m.home_goals,
-                    "away_goals": m.away_goals,
+                    "home_goals": home_goals,
+                    "away_goals": away_goals,
                 })
         
         self._matches_df = pd.DataFrame(data)
@@ -230,6 +253,45 @@ class FeatureEngineer:
             self._matches_df["date"] = pd.to_datetime(self._matches_df["date"])
             self._matches_df = self._matches_df.sort_values("date")
             self._calculate_league_averages()
+            self._calculate_all_elo_ratings()
+
+    def _calculate_all_elo_ratings(self) -> None:
+        """Calculate ELO ratings for all teams based on loaded matches."""
+        if self._matches_df is None or self._matches_df.empty:
+            return
+            
+        self._elo_ratings = {}
+        
+        for _, row in self._matches_df.iterrows():
+            home_id = row["home_team_id"]
+            away_id = row["away_team_id"]
+            
+            # Initialize if new
+            if home_id not in self._elo_ratings: self._elo_ratings[home_id] = 1500.0
+            if away_id not in self._elo_ratings: self._elo_ratings[away_id] = 1500.0
+            
+            # Current ratings
+            r_home = self._elo_ratings[home_id]
+            r_away = self._elo_ratings[away_id]
+            
+            # Expected outcome
+            e_home = 1 / (1 + 10 ** ((r_away - (r_home + self._elo_home_advantage)) / 400))
+            
+            # Actual outcome
+            if row["home_goals"] > row["away_goals"]:
+                s_home = 1.0
+            elif row["home_goals"] < row["away_goals"]:
+                s_home = 0.0
+            else:
+                s_home = 0.5
+                
+            # Update ratings
+            self._elo_ratings[home_id] += self._elo_k_factor * (s_home - e_home)
+            self._elo_ratings[away_id] -= self._elo_k_factor * (s_home - e_home)
+
+    def get_elo(self, team_id: int) -> float:
+        """Get current ELO rating for a team."""
+        return self._elo_ratings.get(team_id, 1500.0)
     
     def _calculate_league_averages(self) -> None:
         """Calculate league-wide averages for strength ratings."""
@@ -346,13 +408,21 @@ class FeatureEngineer:
         if team_matches.empty:
             return self._empty_form()
         
+        # Apply time-decay weighting
+        # The most recent match has weight 1.0, the one before decay_factor, then decay_factor^2, etc.
+        weights = np.array([self.decay_factor**i for i in range(len(team_matches))])
+        weights = weights / weights.sum()  # Normalize weights
+        
+        def weighted_mean(series):
+            return np.average(series, weights=weights)
+        
         return {
-            "goals_scored": team_matches["goals_scored"].mean(),
-            "goals_conceded": team_matches["goals_conceded"].mean(),
-            "points": team_matches["points"].mean(),
-            "win_rate": team_matches["win"].mean(),
-            "clean_sheets_rate": team_matches["clean_sheet"].mean(),
-            "btts_rate": team_matches["btts"].mean(),
+            "goals_scored": weighted_mean(team_matches["goals_scored"]),
+            "goals_conceded": weighted_mean(team_matches["goals_conceded"]),
+            "points": weighted_mean(team_matches["points"]),
+            "win_rate": weighted_mean(team_matches["win"]),
+            "clean_sheets_rate": weighted_mean(team_matches["clean_sheet"]),
+            "btts_rate": weighted_mean(team_matches["btts"]),
             "matches": len(team_matches),
         }
     
@@ -515,21 +585,26 @@ class FeatureEngineer:
         Returns:
             MatchFeatures object with all calculated features
         """
+        # Handle both Match and FDMatch objects
+        fixture_id = getattr(match, 'fixture_id', getattr(match, 'match_id', None))
+        league_id = getattr(match, 'league_id', getattr(match, 'competition_id', None))
+        date = getattr(match, 'date', getattr(match, 'utc_date', None))
+        
         features = MatchFeatures(
-            fixture_id=match.fixture_id,
+            fixture_id=fixture_id,
             home_team_id=match.home_team_id,
             home_team_name=match.home_team_name,
             away_team_id=match.away_team_id,
             away_team_name=match.away_team_name,
-            league_id=match.league_id,
+            league_id=league_id,
         )
         
         # Overall form
         home_form = self._get_team_form(
-            match.home_team_id, match.date, self.form_matches
+            match.home_team_id, date, self.form_matches
         )
         away_form = self._get_team_form(
-            match.away_team_id, match.date, self.form_matches
+            match.away_team_id, date, self.form_matches
         )
         
         features.home_form_goals_scored = home_form["goals_scored"]
@@ -574,6 +649,10 @@ class FeatureEngineer:
         features.home_defense_strength = home_def
         features.away_attack_strength = away_att
         features.away_defense_strength = away_def
+        
+        # ELO Ratings
+        features.home_elo = self.get_elo(match.home_team_id)
+        features.away_elo = self.get_elo(match.away_team_id)
         
         # Head-to-head
         if h2h_matches:
@@ -645,16 +724,19 @@ class FeatureEngineer:
         targets = []
         
         for match in matches:
-            if match.home_goals is None or match.away_goals is None:
+            home_goals = getattr(match, 'home_goals', getattr(match, 'home_score', None))
+            away_goals = getattr(match, 'away_goals', getattr(match, 'away_score', None))
+            
+            if home_goals is None or away_goals is None:
                 continue
                 
             features = self.calculate_features(match)
             features_list.append(features.to_dict())
             
             # Target: 0 = Home Win, 1 = Draw, 2 = Away Win
-            if match.home_goals > match.away_goals:
+            if home_goals > away_goals:
                 targets.append(0)
-            elif match.home_goals == match.away_goals:
+            elif home_goals == away_goals:
                 targets.append(1)
             else:
                 targets.append(2)

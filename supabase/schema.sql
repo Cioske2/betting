@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS bet_selections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     bet_id UUID REFERENCES bets(id) ON DELETE CASCADE,
     fixture_id INTEGER NOT NULL,
+    home_team TEXT,
+    away_team TEXT,
     market TEXT NOT NULL,
     selection TEXT NOT NULL,
     odds DECIMAL NOT NULL,

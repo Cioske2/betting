@@ -161,6 +161,28 @@ class ValueBetAnalyzer:
         if odds <= 1.0:
             return 1.0
         return 1.0 / odds
+
+    @staticmethod
+    def remove_margin(odds_dict: Dict[str, float]) -> Dict[str, float]:
+        """
+        Remove bookmaker margin to get fair probabilities.
+        Uses the proportional method (Multiplicative).
+        
+        Args:
+            odds_dict: Dictionary of odds {"1": 2.0, "X": 3.0, "2": 4.0}
+            
+        Returns:
+            Dictionary of fair probabilities
+        """
+        implied_probs = {k: 1.0 / v for k, v in odds_dict.items() if v > 0}
+        total_prob = sum(implied_probs.values())
+        
+        if total_prob <= 0:
+            return {k: 0.33 for k in odds_dict.keys()}
+            
+        # Normalize to sum to 1.0
+        fair_probs = {k: p / total_prob for k, p in implied_probs.items()}
+        return fair_probs
     
     @staticmethod
     def probability_to_odds(prob: float) -> float:
@@ -353,12 +375,25 @@ class ValueBetAnalyzer:
             MatchValueAnalysis with complete analysis
         """
         results = []
+        fair_probs = self.remove_margin(bookmaker_odds)
         
         for outcome in ["1", "X", "2"]:
             model_p = model_probs.get(outcome, 0.33)
             book_odds = bookmaker_odds.get(outcome, 2.0)
+            fair_p = fair_probs.get(outcome, 0.33)
             
             result = self.analyze_outcome(outcome, model_p, book_odds)
+            
+            # Add fair probability to the result (we might need to update ValueBetResult class)
+            # For now, let's just use it to refine 'is_value'
+            # A "safer" bet is when Model Prob > Fair Prob, not just Model Prob > Book Prob
+            if result.is_value and model_p <= fair_p:
+                # If model prob is less than fair prob, it's a risky "value" 
+                # because it might just be the margin we are seeing.
+                result.is_value = False 
+                result.kelly_stake = 0.0
+                result.confidence = BetConfidence.LOW
+                
             results.append(result)
         
         # Find best value bet

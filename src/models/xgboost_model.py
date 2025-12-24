@@ -142,7 +142,25 @@ class XGBoostPredictor:
         self._is_fitted = True
         logger.info("Model training complete")
         
+        # Log feature importance
+        importance = self.get_feature_importance()
+        top_5 = sorted(importance.items(), key=lambda x: x[1], reverse=True)[:5]
+        logger.info(f"Top 5 features: {', '.join([f'{k}: {v:.4f}' for k, v in top_5])}")
+        
         return self
+    
+    def get_feature_importance(self) -> Dict[str, float]:
+        """
+        Get feature importance from the trained model.
+        
+        Returns:
+            Dictionary mapping feature names to importance scores
+        """
+        if not self._is_fitted or self._model is None:
+            return {}
+            
+        importances = self._model.feature_importances_
+        return dict(zip(self._feature_names, importances))
     
     def cross_validate(
         self,
