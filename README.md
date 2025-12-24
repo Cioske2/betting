@@ -1,6 +1,6 @@
-# ⚽ AI Football Betting Predictor
+# AI Football Betting Predictor
 
-Un sistema avanzato di predizione per partite di calcio che utilizza un ensemble di modelli statistici (Poisson) e machine learning (XGBoost).
+An advanced prediction system for football matches using an ensemble of statistical models (Poisson) and machine learning (XGBoost).
 
 ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
 ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
@@ -9,16 +9,21 @@ Un sistema avanzato di predizione per partite di calcio che utilizza un ensemble
 
 ---
 
-## 🚀 Features
+## Features
 
-- **🎯 Hybrid Ensemble Model**: Combina distribuzione di Poisson con XGBoost per predizioni 1X2 ad alta precisione
-- **📡 Real-time Data**: Integrazione con `football-data.org` e `api-football.com`
-- **🤖 Automated Training**: Processo di training in background con sincronizzazione multi-worker
-- **📊 Advanced Features**: Calcola forma delle squadre, forza attacco/difesa, statistiche H2H
-- **💎 Value Bet Detection**: Identifica scommesse con valore positivo atteso usando Kelly Criterion
-- **🎨 Modern UI**: Dashboard responsive con React, Vite e Tailwind CSS
+- **Hybrid Ensemble Model**: Combines Poisson distribution with XGBoost for high-precision 1X2 predictions.
+- **ELO Rating System**: Dynamic rating system to evaluate the relative strength of teams in real-time.
+- **League Standings**: Integration of official standings to consider positioning and motivation.
+- **Margin Removal**: Algorithm to remove bookmaker overround and find "Fair Odds" (real odds).
+- **Fractional Kelly Criterion**: Safe bankroll management using 1/4 Kelly to minimize risk.
+- **Time-Decay Weighting**: Algorithm that gives more importance to recent results compared to past ones.
+- **Value Bet Detection**: Identifies bets with positive expected value by comparing model probabilities and real odds.
+- **Modern UI**: Responsive dashboard with minimizable bet slip and detailed bet history.
+- **Supabase Persistence**: Persistent storage of bets, selections, and statistics.
 
----## 🛠️ Setup & Installation
+---
+
+## Setup & Installation
 
 ### 1. Environment Configuration
 Create a `.env` file in the root directory (see `.env.example` for reference). **Never commit your `.env` file to GitHub.**
@@ -50,7 +55,7 @@ npm install
 npm run dev
 ```
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 The system is built with a **FastAPI** backend and a **React (Vite)** frontend, using a hybrid modeling approach for match predictions.
 
@@ -69,12 +74,16 @@ The system is built with a **FastAPI** backend and a **React (Vite)** frontend, 
    - `EnsemblePredictor`: Combines both models with weighted averaging.
 
 4. **API Endpoints (`src/api/`)**:
-   - RESTful endpoints for training, predicting, and health checks.
-   - Background training with multi-worker synchronization via file locks.
+   - RESTful endpoints for training, predictions, and bet management.
+   - Background training with multi-worker synchronization.
+
+5. **Database (`supabase/`)**:
+   - PostgreSQL schema for persistence of bets and selections.
+   - Automatic triggers for updating bet slip status.
 
 ---
 
-## 🧠 Prediction Logic
+## Prediction Logic
 
 ### 1. Poisson Distribution Model
 
@@ -88,9 +97,9 @@ The system is built with a **FastAPI** backend and a **React (Vite)** frontend, 
 
 **Formula**:
 ```
-λ_home = home_attack × away_defense × league_home_avg
-λ_away = away_attack × home_defense × league_away_avg
-P(X = k) = (λ^k × e^-λ) / k!
+?_home = home_attack  away_defense  league_home_avg
+?_away = away_attack  home_defense  league_away_avg
+P(X = k) = (?^k  e^-?) / k!
 ```
 
 **Strength**: Excellent for capturing fundamental statistical nature of football scoring.
@@ -99,16 +108,32 @@ P(X = k) = (λ^k × e^-λ) / k!
 
 ### 2. XGBoost (Machine Learning)
 
-**Concept**: Gradient Boosted Decision Tree model analyzing 28+ features.
+**Concept**: Gradient Boosted Decision Tree model that analyzes over 30 advanced features.
 
 **Features**:
-- **Form**: Points and goals in the last 5 matches
-- **H2H**: Historical performance between the two specific teams
-- **Home/Away Bias**: Performance differential by venue
-- **Clean Sheet/BTTS rates**: Defensive and offensive consistency
-- **Attack/Defense Strength**: Relative to league average
+- **ELO Rating**: Dynamic relative strength of teams.
+- **League Rank**: Current position in the standings.
+- **Time-Decay Form**: Points and goals in recent matches with higher weight on recent results.
+- **H2H**: Historical performance between the two specific teams.
+- **Home/Away Bias**: Performance differential between home and away.
+- **Clean Sheet/BTTS rates**: Defensive and offensive consistency.
 
-**Strength**: Captures non-linear relationships and momentum that simple statistics might miss.
+**Strength**: Captures non-linear relationships and "momentum" that simple statistics might ignore.
+
+---
+
+## Advanced Betting Logic
+
+### 1. ELO Rating System
+The system assigns a strength score to each team. After each match, points are exchanged between winner and loser based on the expected probability of the result. This allows identifying teams on the rise or decline before bookmakers update their odds.
+
+### 2. Margin Removal (Fair Odds)
+Bookmakers add a "margin" (overround) to the odds. Our algorithm removes this margin to find the **Real Probability** of the market, allowing an honest comparison with our AI model's probabilities.
+
+### 3. Fractional Kelly Criterion
+To protect the bankroll, the system suggests a stake based on the fractional Kelly criterion (1/4).
+`Stake = (Probability * Odds - 1) / (Odds - 1) * 0.25`
+This balances capital growth with protection against losing streaks.
 
 ---
 
@@ -116,7 +141,7 @@ P(X = k) = (λ^k × e^-λ) / k!
 
 Final probability is a **weighted average**:
 ```
-Final Probability = (Poisson × 0.4) + (XGBoost × 0.6)
+Final Probability = (Poisson  0.4) + (XGBoost  0.6)
 ```
 *Weights are configurable in `.env`*
 
@@ -127,7 +152,7 @@ Final Probability = (Poisson × 0.4) + (XGBoost × 0.6)
 
 ---
 
-## 🔄 Data Flow & Training
+## Data Flow & Training
 
 ### Training Phase
 
@@ -149,9 +174,9 @@ Final Probability = (Poisson × 0.4) + (XGBoost × 0.6)
 
 ---
 
-## ⚡ Performance Optimizations
+## Performance Optimizations
 
-- **CPU Efficiency**: Team-first filtering reduces complexity from O(N²) to O(N) for form calculations
+- **CPU Efficiency**: Team-first filtering reduces complexity from O(N) to O(N) for form calculations
 - **Non-Blocking I/O**: Heavy training runs in separate threads (`asyncio.to_thread`) to keep API responsive
 - **Caching**: API responses cached to respect rate limits (10 requests/min for football-data.org)
 - **Gunicorn Timeout**: Increased to 600s for deep model training on cloud environments
@@ -159,9 +184,7 @@ Final Probability = (Poisson × 0.4) + (XGBoost × 0.6)
 
 ---
 
-## 📂 Project Structure
-
-## 📊 API Endpoints
+## API Endpoints
 
 ### Core Endpoints
 
@@ -171,6 +194,10 @@ Final Probability = (Poisson × 0.4) + (XGBoost × 0.6)
 - `GET /api/health` - Check system status & model readiness
 - `GET /api/upcoming-matches` - Fetch scheduled matches with filters
 - `GET /api/leagues` - List supported leagues
+- `GET /api/standings/{league_id}` - League table
+- `GET /api/team/{team_id}/stats` - Team statistics
+- `GET /api/h2h/{team1_id}/{team2_id}` - Head-to-head
+- `GET /api/odds/{fixture_id}` - Bookmaker odds
 
 ### Interactive Documentation
 
@@ -178,7 +205,7 @@ Visit `/docs` for Swagger UI or `/redoc` for ReDoc documentation when server is 
 
 ---
 
-## 🎯 Value Bet Detection
+## Value Bet Detection
 
 A bet has value when:
 ```
@@ -187,18 +214,18 @@ model_probability > implied_probability_from_odds
 
 **Expected Value Calculation**:
 ```
-EV = (probability × odds) - 1
+EV = (probability  odds) - 1
 ```
 
 **Kelly Criterion for Stake Sizing**:
 ```
-stake% = [(odds × probability - 1) / (odds - 1)] × kelly_fraction
+stake% = [(odds  probability - 1) / (odds - 1)]  kelly_fraction
 ```
 *Default kelly_fraction = 0.25 (conservative)*
 
 ---
 
-## 🌍 Supported Leagues
+## Supported Leagues
 
 | ID  | League          | Country | Season Coverage |
 |-----|----------------|---------|----------------|
@@ -210,7 +237,7 @@ stake% = [(odds × probability - 1) / (odds - 1)] × kelly_fraction
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 All configuration is done via environment variables in `.env`:
 
@@ -241,7 +268,7 @@ PORT=8000
 
 ---
 
-## 🚀 Deployment
+## Deployment
 
 ### Railway / Render / Heroku
 
@@ -252,65 +279,18 @@ PORT=8000
    ```
 3. Deploy from GitHub repository
 
-### Docker (Optional)
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-CMD ["gunicorn", "main:app", "--workers", "2", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "600", "--bind", "0.0.0.0:8000"]
-```
-
 ---
 
-## 📈 Development
-
-```bash
-# Run with auto-reload
-python main.py
-
-# Or use uvicorn directly
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-
-# Run tests (if implemented)
-pytest tests/ -v
-```
-
----
-
-## ⚖️ License
+## License
 
 MIT License - Feel free to use and modify.
 
 ---
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 **For educational and informational purposes only.** 
 
 This tool provides statistical predictions based on historical data and mathematical models. It does not guarantee outcomes. Sports betting involves financial risk. Always bet responsibly and within your means.
 
 **The developers are not responsible for any financial losses incurred from using this tool.**
-- `GET /api/health` - System status
-- `GET /api/leagues` - Available leagues
-- `GET /api/fixtures/upcoming?league_id=39` - Upcoming matches
-- `GET /api/standings/{league_id}` - League table
-- `GET /api/team/{team_id}/stats` - Team statistics
-- `GET /api/h2h/{team1_id}/{team2_id}` - Head-to-head
-- `GET /api/odds/{fixture_id}` - Bookmaker odds
-- `POST /api/train` - Train models
-
-## Supported Leagues
-
-| ID | League | Country |
-|---|---|---|
-| 39 | Premier League | England |
-| 140 | La Liga | Spain |
-| 135 | Serie A | Italy |
-| 78 | Bundesliga | Germany |
-| 61 | Ligue 1 | France |
-
-
-
