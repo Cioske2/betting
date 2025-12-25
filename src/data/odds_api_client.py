@@ -140,7 +140,22 @@ def normalize_team(name: str) -> str:
     
     if name in aliases:
         return aliases[name].lower()
-        
+
+    # Add simple variants for alias keys (e.g., include keys without trailing ' FC' or ' AFC')
+    # This helps match team names coming from different APIs (with/without suffixes)
+    alias_variants = {}
+    for k, v in list(aliases.items()):
+        if k.endswith(" FC") and k[:-3] not in aliases:
+            alias_variants[k[:-3]] = v
+        if k.endswith(" AFC") and k[:-4] not in aliases:
+            alias_variants[k[:-4]] = v
+    # Merge variants into aliases for lookup
+    if alias_variants:
+        aliases.update(alias_variants)
+        # Re-check for alias match with new variants
+        if name in aliases:
+            return aliases[name].lower()
+
     # 3. Dynamic cleanup if not an exact match alias
     # Remove common prefixes/suffixes
     remove_list = [
@@ -162,6 +177,31 @@ def normalize_team(name: str) -> str:
     name = name.replace("&", "AND")
         
     return name.strip().lower()
+
+# Markets we support from The Odds API for our usage
+SUPPORTED_MARKETS = {"h2h", "totals"}
+
+
+def sanitize_markets(markets: str) -> str:
+    """Return a sanitized comma-separated markets string containing only supported markets.
+    If no supported markets are found, defaults to 'h2h'.
+    """
+    if not markets:
+        return ",".join(sorted(SUPPORTED_MARKETS))
+
+    parts = [p.strip().lower() for p in markets.split(",") if p.strip()]
+    filtered = [p for p in parts if p in SUPPORTED_MARKETS]
+    removed = [p for p in parts if p not in SUPPORTED_MARKETS]
+
+    if removed:
+        logger.warning(f"Removed unsupported markets: {removed}. Using: {filtered or ['h2h']}")
+
+    if not filtered:
+        # fallback to 'h2h' to avoid making requests that will 422
+        return "h2h"
+
+    return ",".join(filtered)
+
 
 class OddsApiClient:
     """
@@ -198,11 +238,14 @@ class OddsApiClient:
             logger.error("The Odds API key is missing")
             return []
 
+        # Sanitize markets to avoid requesting unsupported ones (which trigger 422)
+        sanitized = sanitize_markets(markets)
+
         url = f"{self.BASE_URL}/{sport_key}/odds/"
         params = {
             "apiKey": self.api_key,
             "regions": regions,
-            "markets": markets,
+            "markets": sanitized,
             "oddsFormat": "decimal",
             "dateFormat": "iso"
         }
