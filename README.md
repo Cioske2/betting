@@ -3,9 +3,14 @@
 An advanced prediction system for football matches using an ensemble of statistical models (Poisson) and machine learning (XGBoost).
 
 ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
-![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
 ![XGBoost](https://img.shields.io/badge/XGBoost-61DAFB?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
+
+---
+
+> [!IMPORTANT]
+> This repository contains the **Backend API**.
+> The Frontend (React) can be found here: [betting-frontend](https://github.com/Cioske2/betting-frontend)
 
 ---
 
@@ -18,7 +23,6 @@ An advanced prediction system for football matches using an ensemble of statisti
 - **Fractional Kelly Criterion**: Safe bankroll management using 1/4 Kelly to minimize risk.
 - **Time-Decay Weighting**: Algorithm that gives more importance to recent results compared to past ones.
 - **Value Bet Detection**: Identifies bets with positive expected value by comparing model probabilities and real odds.
-- **Modern UI**: Responsive dashboard with minimizable bet slip and detailed bet history.
 - **Supabase Persistence**: Persistent storage of bets, selections, and statistics.
 
 ---
@@ -48,16 +52,9 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### 3. Frontend Setup
-```bash
-cd betting-frontend
-npm install
-npm run dev
-```
-
 ## Architecture Overview
 
-The system is built with a **FastAPI** backend and a **React (Vite)** frontend, using a hybrid modeling approach for match predictions.
+The system is built with a **FastAPI** backend, providing a robust API for match predictions and data analysis.
 
 ### Core Components
 
@@ -165,12 +162,8 @@ Final Probability = (Poisson  0.4) + (XGBoost  0.6)
 
 1. User selects leagues and timeframe
 2. Backend fetches upcoming "SCHEDULED" matches
-3. For each match, `EnsemblePredictor` generates:
-   - Win/Draw/Loss probabilities
-   - Expected Goals (xG)
-   - Predicted scoreline
-   - Confidence level
-4. Frontend displays predictions sorted by date
+3. For each match, `EnsemblePredictor` generates detailed predictions.
+4. Data is served via REST API to the integrated dashboard.
 
 ---
 
@@ -229,11 +222,11 @@ stake% = [(odds  probability - 1) / (odds - 1)]  kelly_fraction
 
 | ID  | League          | Country | Season Coverage |
 |-----|----------------|---------|----------------|
-| 39  | Premier League | England | 2024-2025      |
-| 140 | La Liga        | Spain   | 2024-2025      |
-| 135 | Serie A        | Italy   | 2024-2025      |
-| 78  | Bundesliga     | Germany | 2024-2025      |
-| 61  | Ligue 1        | France  | 2024-2025      |
+| 39  | Premier League | England | 2025-2026      |
+| 140 | La Liga        | Spain   | 2025-2026      |
+| 135 | Serie A        | Italy   | 2025-2026      |
+| 78  | Bundesliga     | Germany | 2025-2026      |
+| 61  | Ligue 1        | France  | 2025-2026      |
 
 ---
 

@@ -9,9 +9,7 @@ async def check_names():
     client = get_odds_api_client()
     
     leagues_to_check = [
-        ("soccer_spain_la_liga", "La Liga"),
-        ("soccer_germany_bundesliga", "Bundesliga"),
-        ("soccer_france_ligue_1", "Ligue 1")
+        ("soccer_france_ligue_one", "Ligue 1")
     ]
     
     print("\n--- CHECKING TEAM NAMES ---")

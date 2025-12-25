@@ -1,17 +1,27 @@
 import httpx
 import logging
+import unicodedata
 from typing import Dict, List, Optional, Any
 from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
+def remove_accents(input_str: str) -> str:
+    """Remove accents from a string."""
+    nfkd_form = unicodedata.normalize('NFKD', input_str)
+    return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+
 def normalize_team(name: str) -> str:
     """Standardize team names for cross-API matching."""
-    # 1. Basic cleanup
-    name = name.upper().strip()
+    if not name:
+        return ""
+
+    # 1. Remove accents and convert to uppercase
+    name = remove_accents(name).upper().strip()
     
-    # 2. Known aliases map (FD.org -> The Odds API / Generic simplifications)
+    # 2. Known aliases map (FD.org -> Target Mapping)
     aliases = {
+        # Serie A
         "PARMA CALCIO 1913": "PARMA",
         "ACF FIORENTINA": "FIORENTINA",
         "US LECCE": "LECCE",
@@ -31,6 +41,8 @@ def normalize_team(name: str) -> str:
         "AC MONZA": "MONZA",
         "GENOA CFC": "GENOA",
         "COMO 1907": "COMO",
+        
+        # Premier League
         "BRIGHTON & HOVE ALBION": "BRIGHTON",
         "BRIGHTON AND HOVE ALBION": "BRIGHTON",
         "WEST HAM UNITED FC": "WEST HAM UNITED",
@@ -38,13 +50,30 @@ def normalize_team(name: str) -> str:
         "NEWCASTLE UNITED FC": "NEWCASTLE UNITED",
         "LEICESTER CITY FC": "LEICESTER CITY",
         "WOLVERHAMPTON WANDERERS FC": "WOLVERHAMPTON WANDERERS",
+        
         # Ligue 1
         "PARIS SAINT-GERMAIN FC": "PSG",
+        "PARIS SAINT GERMAIN": "PSG",
         "PARIS SG": "PSG",
         "AS MONACO FC": "MONACO",
+        "AS MONACO": "MONACO",
         "OLYMPIQUE DE MARSEILLE": "MARSEILLE",
         "OLYMPIQUE LYONNAIS": "LYON",
         "LILLE OSC": "LILLE",
+        "RACING CLUB DE LENS": "LENS",
+        "RC LENS": "LENS",
+        "OGC NICE": "NICE",
+        "RC STRASBOURG ALSACE": "STRASBOURG",
+        "STADE RENNAIS FC 1901": "RENNES",
+        "FC NANTES": "NANTES",
+        "LE HAVRE AC": "LE HAVRE",
+        "ANGERS SCO": "ANGERS",
+        "FC LORIENT": "LORIENT",
+        "FC METZ": "METZ",
+        "STADE BRESTOIS 29": "BREST",
+        "AJ AUXERRE": "AUXERRE",
+        "PARIS FC": "PARIS FC",
+        
         # Bundesliga
         "BAYER 04 LEVERKUSEN": "BAYER LEVERKUSEN",
         "RB LEIPZIG": "RB LEIPZIG",
@@ -56,17 +85,34 @@ def normalize_team(name: str) -> str:
         "TSG 1899 HOFFENHEIM": "HOFFENHEIM",
         "1. FSV MAINZ 05": "MAINZ",
         "FC AUGSBURG": "AUGSBURG",
+        
         # La Liga
         "CLUB ATHLETICO DE MADRID": "ATLETICO MADRID",
+        "CLUB ATLETICO DE MADRID": "ATLETICO MADRID",
+        "ATLETICO MADRID": "ATLETICO MADRID",
+        "ATHLETICO MADRID": "ATLETICO MADRID",
         "CA OSASUNA": "OSASUNA",
         "SEVILLA FC": "SEVILLA",
         "REAL BETIS BALOMPIE": "REAL BETIS",
         "REAL SOCIEDAD DE FUTBOL": "REAL SOCIEDAD",
         "VILLARREAL CF": "VILLARREAL",
         "ATHLETIC CLUB": "ATHLETIC BILBAO",
+        "ATHLETIC BILBAO": "ATHLETIC BILBAO",
         "VALENCIA CF": "VALENCIA",
         "GETAFE CF": "GETAFE",
-        "RCD MALLORCA": "MALLORCA"
+        "RCD MALLORCA": "MALLORCA",
+        "RAYO VALLECANO DE MADRID": "RAYO VALLECANO",
+        "RC CELTA DE VIGO": "CELTA VIGO",
+        "CELTA VIGO": "CELTA VIGO",
+        "ELCHE CF": "ELCHE",
+        "RCD ESPANYOL DE BARCELONA": "ESPANYOL",
+        "FC BARCELONA": "BARCELONA",
+        "LEVANTE UD": "LEVANTE",
+        "REAL MADRID CF": "REAL MADRID",
+        "DEPORTIVO ALAVES": "ALAVES",
+        "REAL OVIEDO": "OVIEDO",
+        "OVIEDO": "OVIEDO",
+        "GIRONA FC": "GIRONA"
     }
     
     if name in aliases:
@@ -75,10 +121,18 @@ def normalize_team(name: str) -> str:
     # 3. Dynamic cleanup if not an exact match alias
     # Remove common prefixes/suffixes
     remove_list = [
-        " FC", " AFC", " CF", " SC", " AS", " SSC", " RC", " UD", " SD", " CD", " FK", " BK", 
-        " BC", " AC", " US", " CALCIO", " 1913", " 1909", " 1907"
+        " FC", " AFC", " CF", " SC", " AS ", " SSC", " RC ", " UD", " SD", " CD", " FK", " BK", 
+        " BC", " AC ", " US ", " CALCIO", " 1913", " 1909", " 1907", " 1901"
     ]
     
+    # Standardize some prefixes that might be at the start
+    if name.startswith("RC "): name = name[3:]
+    if name.startswith("AS "): name = name[3:]
+    if name.startswith("FC "): name = name[3:]
+    if name.startswith("UD "): name = name[3:]
+    if name.startswith("SD "): name = name[3:]
+    if name.startswith("CD "): name = name[3:]
+
     for s in remove_list:
         name = name.replace(s, "")
         

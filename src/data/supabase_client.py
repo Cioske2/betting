@@ -45,6 +45,7 @@ class SupabaseClient:
                 "odds": sel["odds"],
                 "home_team": sel.get("home_team"),
                 "away_team": sel.get("away_team"),
+                "league_name": sel.get("league_name"),
                 "status": "pending"
             })
         

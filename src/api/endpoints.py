@@ -188,7 +188,7 @@ class TrainRequest(BaseModel):
         description="League IDs to train on (defaults to all configured)"
     )
     season: int = Field(
-        default=2024,
+        default=2025,
         description="Season year to train on"
     )
 
@@ -564,6 +564,7 @@ class BetSelection(BaseModel):
     market: str = "Match Winner"
     home_team: Optional[str] = None
     away_team: Optional[str] = None
+    league_name: Optional[str] = None
 
 class PlaceBetRequest(BaseModel):
     stake: float
@@ -695,7 +696,7 @@ async def get_upcoming_fixtures(
 async def get_team_stats(
     team_id: int,
     league_id: int = Query(default=39, description="League ID"),
-    season: int = Query(default=2024, description="Season year")
+    season: int = Query(default=2025, description="Season year")
 ):
     """
     Get detailed statistics for a team.
@@ -825,7 +826,7 @@ async def get_head_to_head(
 @router.get("/standings/{league_id}", tags=["Data"])
 async def get_standings(
     league_id: int,
-    season: int = Query(default=2024, description="Season year")
+    season: int = Query(default=2025, description="Season year")
 ):
     """
     Get current league standings.
@@ -979,8 +980,8 @@ async def train_models_background(settings):
     current_season = current_year if current_month >= 8 else current_year - 1
     
     # Use only football-data.org (API-Football account is suspended)
-    # Fetch 2 seasons: current and previous
-    fd_seasons = [current_season, current_season - 1]  # 2025, 2024
+    # Fetch 3 seasons: current and two previous
+    fd_seasons = [current_season, current_season - 1, current_season - 2]  # 2025, 2024, 2023
     
     try:
         all_matches = []
