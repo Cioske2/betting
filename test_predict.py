@@ -8,6 +8,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 from src.data.api_football_client import get_client
 from src.features.feature_engineering import FeatureEngineer
 from src.models.ensemble import EnsemblePredictor
+from src.config import get_settings
 
 async def test_prediction():
     print("=" * 50)
@@ -47,7 +48,11 @@ async def test_prediction():
     
     # 4. Train ensemble
     print("\n4. Training models...")
-    ensemble = EnsemblePredictor(poisson_weight=0.4, xgboost_weight=0.6)
+    settings = get_settings()
+    ensemble = EnsemblePredictor(
+        poisson_weight=settings.poisson_weight, 
+        xgboost_weight=settings.xgboost_weight
+    )
     
     # Fit Poisson
     print("   Training Poisson model...")

@@ -39,8 +39,8 @@ FOOTBALL_DATA_TOKEN=your_football_data_token_here
 
 # Configuration
 LEAGUE_IDS=39,140,135,78,61
-POISSON_WEIGHT=0.4
-XGBOOST_WEIGHT=0.6
+POISSON_WEIGHT=0.2
+XGBOOST_WEIGHT=0.8
 ```
 
 ### 2. Backend Setup
@@ -138,7 +138,7 @@ This balances capital growth with protection against losing streaks.
 
 Final probability is a **weighted average**:
 ```
-Final Probability = (Poisson  0.4) + (XGBoost  0.6)
+Final Probability = (Poisson  0.2) + (XGBoost  0.8)
 ```
 *Weights are configurable in `.env`*
 
@@ -240,8 +240,8 @@ API_FOOTBALL_KEY=your_key_here
 FOOTBALL_DATA_TOKEN=your_token_here
 
 # Model Weights (must sum to 1.0)
-POISSON_WEIGHT=0.4
-XGBOOST_WEIGHT=0.6
+POISSON_WEIGHT=0.2
+XGBOOST_WEIGHT=0.8
 
 # Value Bet Settings
 MIN_EDGE=0.05           # Minimum 5% edge to recommend

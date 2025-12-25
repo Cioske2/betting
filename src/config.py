@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     )
     
     # Model weights for ensemble
-    poisson_weight: float = Field(default=0.4, ge=0, le=1)
-    xgboost_weight: float = Field(default=0.6, ge=0, le=1)
+    poisson_weight: float = Field(default=0.2, ge=0, le=1)
+    xgboost_weight: float = Field(default=0.8, ge=0, le=1)
     
     # Value bet settings
     min_edge: float = Field(
