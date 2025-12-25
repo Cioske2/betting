@@ -149,18 +149,47 @@ class XGBoostPredictor:
         
         return self
     
-    def get_feature_importance(self) -> Dict[str, float]:
+    def get_feature_importance(
+        self,
+        importance_type: str = "gain"
+    ) -> Dict[str, float]:
         """
-        Get feature importance from the trained model.
+        Get feature importance scores.
         
+        Args:
+            importance_type: Type of importance (weight, gain, cover)
+            
         Returns:
             Dictionary mapping feature names to importance scores
         """
         if not self._is_fitted or self._model is None:
             return {}
-            
-        importances = self._model.feature_importances_
-        return dict(zip(self._feature_names, importances))
+        
+        importance = self._model.get_booster().get_score(
+            importance_type=importance_type
+        )
+        
+        if not importance:
+            # Fallback to sklearn property if booster score is empty
+            try:
+                importances = self._model.feature_importances_
+                return dict(zip(self._feature_names, [round(float(x), 4) for x in importances]))
+            except:
+                return {name: 0.0 for name in self._feature_names}
+        
+        # Map to feature names and normalize
+        total = sum(importance.values())
+        result = {}
+        
+        for i, name in enumerate(self._feature_names):
+            # Try both the name and the f{i} format
+            score = importance.get(name, importance.get(f"f{i}", 0))
+            result[name] = round(score / total, 4)
+        
+        # Sort by importance
+        result = dict(sorted(result.items(), key=lambda x: x[1], reverse=True))
+        
+        return result
     
     def cross_validate(
         self,
@@ -274,40 +303,6 @@ class XGBoostPredictor:
             ))
         
         return predictions
-    
-    def get_feature_importance(
-        self,
-        importance_type: str = "gain"
-    ) -> Dict[str, float]:
-        """
-        Get feature importance scores.
-        
-        Args:
-            importance_type: Type of importance (weight, gain, cover)
-            
-        Returns:
-            Dictionary mapping feature names to importance scores
-        """
-        if not self._is_fitted or self._model is None:
-            return {}
-        
-        importance = self._model.get_booster().get_score(
-            importance_type=importance_type
-        )
-        
-        # Map to feature names and normalize
-        total = sum(importance.values()) if importance else 1
-        result = {}
-        
-        for i, name in enumerate(self._feature_names):
-            feature_key = f"f{i}"
-            score = importance.get(feature_key, 0) / total
-            result[name] = round(score, 4)
-        
-        # Sort by importance
-        result = dict(sorted(result.items(), key=lambda x: x[1], reverse=True))
-        
-        return result
     
     def save(self, path: str) -> None:
         """
