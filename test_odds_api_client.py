@@ -7,6 +7,8 @@ def test_normalize_team_variants():
     assert normalize_team('Newcastle United FC') == normalize_team('Newcastle United') == 'newcastle'
     # Wolverhampton has alias 'WOLVES' for the full name
     assert normalize_team('Wolverhampton Wanderers FC') == normalize_team('Wolverhampton Wanderers') == 'wolves'
+    # Brighton variants
+    assert normalize_team('Brighton & Hove Albion FC') == normalize_team('Brighton and Hove Albion') == 'brighton'
 
 
 def test_sanitize_markets_removes_btts():

@@ -19,6 +19,30 @@ def normalize_team(name: str) -> str:
     # 1. Remove accents and convert to uppercase
     name = remove_accents(name).upper().strip()
     
+    # 3. Dynamic cleanup first to normalize formatting before alias lookup
+    # Remove common prefixes/suffixes
+    remove_list = [
+        " FC", " AFC", " CF", " SC", " AS ", " SSC", " RC ", " UD", " SD", " CD", " FK", " BK", 
+        " BC", " AC ", " US ", " CALCIO", " 1913", " 1909", " 1907", " 1901"
+    ]
+    
+    # Standardize some prefixes that might be at the start
+    if name.startswith("RC "): name = name[3:]
+    if name.startswith("AS "): name = name[3:]
+    if name.startswith("FC "): name = name[3:]
+    if name.startswith("UD "): name = name[3:]
+    if name.startswith("SD "): name = name[3:]
+    if name.startswith("CD "): name = name[3:]
+
+    for s in remove_list:
+        name = name.replace(s, "")
+        
+    # Normalize ampersand consistently
+    name = name.replace("&", "AND")
+
+    # Remove extra whitespace
+    name = " ".join(name.split())
+
     # 2. Known aliases map (FD.org -> Target Mapping)
     aliases = {
         # Serie A
@@ -43,8 +67,8 @@ def normalize_team(name: str) -> str:
         "COMO 1907": "COMO",
         
         # Premier League (abbreviated common names)
-        "BRIGHTON & HOVE ALBION": "BRIGHTON",
         "BRIGHTON AND HOVE ALBION": "BRIGHTON",
+        "BRIGHTON & HOVE ALBION": "BRIGHTON",
         "WEST HAM UNITED FC": "WEST HAM",
         "TOTTENHAM HOTSPUR FC": "TOTTENHAM",
         "NEWCASTLE UNITED FC": "NEWCASTLE",
@@ -138,6 +162,7 @@ def normalize_team(name: str) -> str:
         "GIRONA FC": "GIRONA"
     }
     
+    # 2. First check aliases now we have cleaned the name
     if name in aliases:
         return aliases[name].lower()
 
@@ -156,26 +181,6 @@ def normalize_team(name: str) -> str:
         if name in aliases:
             return aliases[name].lower()
 
-    # 3. Dynamic cleanup if not an exact match alias
-    # Remove common prefixes/suffixes
-    remove_list = [
-        " FC", " AFC", " CF", " SC", " AS ", " SSC", " RC ", " UD", " SD", " CD", " FK", " BK", 
-        " BC", " AC ", " US ", " CALCIO", " 1913", " 1909", " 1907", " 1901"
-    ]
-    
-    # Standardize some prefixes that might be at the start
-    if name.startswith("RC "): name = name[3:]
-    if name.startswith("AS "): name = name[3:]
-    if name.startswith("FC "): name = name[3:]
-    if name.startswith("UD "): name = name[3:]
-    if name.startswith("SD "): name = name[3:]
-    if name.startswith("CD "): name = name[3:]
-
-    for s in remove_list:
-        name = name.replace(s, "")
-        
-    name = name.replace("&", "AND")
-        
     return name.strip().lower()
 
 # Markets we support from The Odds API for our usage
