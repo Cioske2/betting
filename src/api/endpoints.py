@@ -431,6 +431,14 @@ async def get_upcoming_matches_with_predictions(
             # 3. Get current standings
             standings = await fd_client.get_standings(league_id=lid, season=season)
             
+            # Load finished matches into feature engineer so we can compute ELO and other features
+            feature_eng = get_feature_engineer()
+            try:
+                # load_matches handles both Match and FDMatch types
+                feature_eng.load_matches(finished_matches)
+            except Exception as e:
+                logger.warning(f"Failed to load matches into feature engineer for league {lid}: {e}")
+            
             # Convert FDMatch to dict for Poisson model
             history_dicts = []
             for m in finished_matches:
@@ -448,6 +456,13 @@ async def get_upcoming_matches_with_predictions(
                     home_l5 = [m for m in history_dicts if m["home_team_id"] == f.home_team_id or m["away_team_id"] == f.home_team_id][:5]
                     away_l5 = [m for m in history_dicts if m["home_team_id"] == f.away_team_id or m["away_team_id"] == f.away_team_id][:5]
                     
+                    # Build feature object (includes ELO)
+                    features = None
+                    try:
+                        features = feature_eng.calculate_features(f, None, standings)
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate features for fixture {f.match_id}: {e}")
+                    
                     # Predictions
                     prediction = ensemble.predict(
                         home_team_id=f.home_team_id,
@@ -455,6 +470,7 @@ async def get_upcoming_matches_with_predictions(
                         home_team_name=f.home_team_name,
                         away_team_name=f.away_team_name,
                         league_id=lid,
+                        features=features,
                         home_last_5=home_l5,
                         away_last_5=away_l5
                     )

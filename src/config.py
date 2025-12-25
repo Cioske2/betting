@@ -61,6 +61,13 @@ class Settings(BaseSettings):
         default=5,
         description="Number of recent matches for form calculation"
     )
+    # Season decay factor for ELO weighting: previous season weight = season_decay, previous^2 = season_decay^2
+    season_decay: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Seasonal decay factor applied to older seasons when calculating ELO"
+    )
     h2h_matches: int = Field(
         default=10,
         description="Number of head-to-head matches to consider"

@@ -202,7 +202,7 @@ class FeatureEngineer:
     - Generate feature vectors for model input
     """
     
-    def __init__(self, form_matches: int = 5, decay_factor: float = 0.9):
+    def __init__(self, form_matches: int = 5, decay_factor: float = 0.9, season_decay: float = 0.85):
         """
         Initialize the feature engineer.
         
@@ -210,9 +210,12 @@ class FeatureEngineer:
             form_matches: Number of recent matches to use for form calculation
             decay_factor: Factor for time-decay weighting (0-1). 
                          1.0 means no decay, lower means older matches count less.
+            season_decay: Seasonal decay factor applied to older seasons when computing ELO.
+                         previous season weight = season_decay, previous^2 = season_decay^2
         """
         self.form_matches = form_matches
         self.decay_factor = decay_factor
+        self.season_decay = season_decay
         self._matches_df: Optional[pd.DataFrame] = None
         self._league_stats: Dict[int, Dict] = {}
         self._elo_ratings: Dict[int, float] = {}  # team_id -> rating
@@ -262,21 +265,35 @@ class FeatureEngineer:
             
         self._elo_ratings = {}
         
+        # Determine the reference season as the most recent season in the dataset
+        seasons = self._matches_df["date"].apply(lambda d: d.year if d.month >= 8 else d.year - 1)
+        current_season = int(seasons.max())
+
         for _, row in self._matches_df.iterrows():
             home_id = row["home_team_id"]
             away_id = row["away_team_id"]
-            
+            match_date = row["date"]
+            # Derive match season (season starts in August)
+            match_season = match_date.year if match_date.month >= 8 else match_date.year - 1
+            season_diff = max(0, current_season - int(match_season))
+
+            # seasonal weight (older seasons reduced by season_decay^season_diff)
+            weight = (self.season_decay ** season_diff) if season_diff > 0 else 1.0
+
+            # Effective K for this match
+            k_eff = self._elo_k_factor * weight
+
             # Initialize if new
             if home_id not in self._elo_ratings: self._elo_ratings[home_id] = 1500.0
             if away_id not in self._elo_ratings: self._elo_ratings[away_id] = 1500.0
-            
+
             # Current ratings
             r_home = self._elo_ratings[home_id]
             r_away = self._elo_ratings[away_id]
-            
+
             # Expected outcome
             e_home = 1 / (1 + 10 ** ((r_away - (r_home + self._elo_home_advantage)) / 400))
-            
+
             # Actual outcome
             if row["home_goals"] > row["away_goals"]:
                 s_home = 1.0
@@ -284,10 +301,10 @@ class FeatureEngineer:
                 s_home = 0.0
             else:
                 s_home = 0.5
-                
-            # Update ratings
-            self._elo_ratings[home_id] += self._elo_k_factor * (s_home - e_home)
-            self._elo_ratings[away_id] -= self._elo_k_factor * (s_home - e_home)
+
+            # Update ratings using effective K
+            self._elo_ratings[home_id] += k_eff * (s_home - e_home)
+            self._elo_ratings[away_id] -= k_eff * (s_home - e_home)
 
     def get_elo(self, team_id: int) -> float:
         """Get current ELO rating for a team."""
@@ -623,10 +640,10 @@ class FeatureEngineer:
         
         # Home/Away specific form
         home_home_form = self._get_team_form(
-            match.home_team_id, match.date, self.form_matches * 2, home_only=True
+            match.home_team_id, date, self.form_matches * 2, home_only=True
         )
         away_away_form = self._get_team_form(
-            match.away_team_id, match.date, self.form_matches * 2, away_only=True
+            match.away_team_id, date, self.form_matches * 2, away_only=True
         )
         
         features.home_home_goals_scored = home_home_form["goals_scored"]
@@ -639,10 +656,10 @@ class FeatureEngineer:
         
         # Attack/Defense strength
         home_att, home_def = self._calculate_attack_defense_strength(
-            match.home_team_id, match.league_id, match.date
+            match.home_team_id, league_id, date
         )
         away_att, away_def = self._calculate_attack_defense_strength(
-            match.away_team_id, match.league_id, match.date
+            match.away_team_id, league_id, date
         )
         
         features.home_attack_strength = home_att
