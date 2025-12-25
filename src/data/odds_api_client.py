@@ -42,14 +42,29 @@ def normalize_team(name: str) -> str:
         "GENOA CFC": "GENOA",
         "COMO 1907": "COMO",
         
-        # Premier League
+        # Premier League (abbreviated common names)
         "BRIGHTON & HOVE ALBION": "BRIGHTON",
         "BRIGHTON AND HOVE ALBION": "BRIGHTON",
-        "WEST HAM UNITED FC": "WEST HAM UNITED",
-        "TOTTENHAM HOTSPUR FC": "TOTTENHAM HOTSPUR",
-        "NEWCASTLE UNITED FC": "NEWCASTLE UNITED",
-        "LEICESTER CITY FC": "LEICESTER CITY",
-        "WOLVERHAMPTON WANDERERS FC": "WOLVERHAMPTON WANDERERS",
+        "WEST HAM UNITED FC": "WEST HAM",
+        "TOTTENHAM HOTSPUR FC": "TOTTENHAM",
+        "NEWCASTLE UNITED FC": "NEWCASTLE",
+        "LEICESTER CITY FC": "LEICESTER",
+        "WOLVERHAMPTON WANDERERS FC": "WOLVES",
+        "MANCHESTER UNITED FC": "MANCHESTER UNITED",
+        "MANCHESTER CITY FC": "MANCHESTER CITY",
+        "CHELSEA FC": "CHELSEA",
+        "LIVERPOOL FC": "LIVERPOOL",
+        "ARSENAL FC": "ARSENAL",
+        "EVERTON FC": "EVERTON",
+        "FULHAM FC": "FULHAM",
+        "ASTON VILLA FC": "ASTON VILLA",
+        "SUNDERLAND AFC": "SUNDERLAND",
+        "BRENTFORD FC": "BRENTFORD",
+        "AFC BOURNEMOUTH": "BOURNEMOUTH",
+        "BURNLEY FC": "BURNLEY",
+        "CRYSTAL PALACE FC": "CRYSTAL PALACE",
+        "LEEDS UNITED FC": "LEEDS",
+        "NOTTINGHAM FOREST FC": "NOTTINGHAM FOREST",
         
         # Ligue 1
         "PARIS SAINT-GERMAIN FC": "PSG",
@@ -74,8 +89,8 @@ def normalize_team(name: str) -> str:
         "AJ AUXERRE": "AUXERRE",
         "PARIS FC": "PARIS FC",
         
-        # Bundesliga
-        "BAYER 04 LEVERKUSEN": "BAYER LEVERKUSEN",
+        # Bundesliga (abbreviated common names)
+        "BAYER 04 LEVERKUSEN": "LEVERKUSEN",
         "RB LEIPZIG": "RB LEIPZIG",
         "FC BAYERN MUNCHEN": "BAYERN MUNICH",
         "BORUSSIA DORTMUND": "DORTMUND",
@@ -85,6 +100,14 @@ def normalize_team(name: str) -> str:
         "TSG 1899 HOFFENHEIM": "HOFFENHEIM",
         "1. FSV MAINZ 05": "MAINZ",
         "FC AUGSBURG": "AUGSBURG",
+        "BORUSSIA MONCHENGLADBACH": "BORUSSIA MOENCHENGLADBACH",
+        "BORUSSIA M'GLADBACH": "BORUSSIA MOENCHENGLADBACH",
+        "FC KOLN": "KOELN",
+        "1. FC KOELN": "KOELN",
+        "FC SCHALKE 04": "SCHALKE 04",
+        "UNION BERLIN": "UNION BERLIN",
+        "HERTHA BSC": "HERTHA",
+        "FC HEIDENHEIM 1846": "HEIDENHEIM",
         
         # La Liga
         "CLUB ATHLETICO DE MADRID": "ATLETICO MADRID",
