@@ -3,6 +3,7 @@ import logging
 import unicodedata
 from typing import Dict, List, Optional, Any
 from ..config import get_settings
+from src.data.api_football_client import get_client as get_api_football_client
 
 logger = logging.getLogger(__name__)
 
@@ -19,30 +20,6 @@ def normalize_team(name: str) -> str:
     # 1. Remove accents and convert to uppercase
     name = remove_accents(name).upper().strip()
     
-    # 3. Dynamic cleanup first to normalize formatting before alias lookup
-    # Remove common prefixes/suffixes
-    remove_list = [
-        " FC", " AFC", " CF", " SC", " AS ", " SSC", " RC ", " UD", " SD", " CD", " FK", " BK", 
-        " BC", " AC ", " US ", " CALCIO", " 1913", " 1909", " 1907", " 1901"
-    ]
-    
-    # Standardize some prefixes that might be at the start
-    if name.startswith("RC "): name = name[3:]
-    if name.startswith("AS "): name = name[3:]
-    if name.startswith("FC "): name = name[3:]
-    if name.startswith("UD "): name = name[3:]
-    if name.startswith("SD "): name = name[3:]
-    if name.startswith("CD "): name = name[3:]
-
-    for s in remove_list:
-        name = name.replace(s, "")
-        
-    # Normalize ampersand consistently
-    name = name.replace("&", "AND")
-
-    # Remove extra whitespace
-    name = " ".join(name.split())
-
     # 2. Known aliases map (FD.org -> Target Mapping)
     aliases = {
         # Serie A
@@ -67,13 +44,15 @@ def normalize_team(name: str) -> str:
         "COMO 1907": "COMO",
         
         # Premier League (abbreviated common names)
-        "BRIGHTON AND HOVE ALBION": "BRIGHTON",
         "BRIGHTON & HOVE ALBION": "BRIGHTON",
+        "BRIGHTON AND HOVE ALBION": "BRIGHTON",
         "WEST HAM UNITED FC": "WEST HAM",
         "TOTTENHAM HOTSPUR FC": "TOTTENHAM",
         "NEWCASTLE UNITED FC": "NEWCASTLE",
+        "NEWCASTLE UNITED": "NEWCASTLE",
         "LEICESTER CITY FC": "LEICESTER",
         "WOLVERHAMPTON WANDERERS FC": "WOLVES",
+        "WOLVERHAMPTON WANDERERS": "WOLVES",
         "MANCHESTER UNITED FC": "MANCHESTER UNITED",
         "MANCHESTER CITY FC": "MANCHESTER CITY",
         "CHELSEA FC": "CHELSEA",
@@ -162,51 +141,51 @@ def normalize_team(name: str) -> str:
         "GIRONA FC": "GIRONA"
     }
     
-    # 2. First check aliases now we have cleaned the name
     if name in aliases:
         return aliases[name].lower()
+        
+    # 3. Dynamic cleanup if not an exact match alias
+    # Remove common prefixes/suffixes
+    # After cleanup we re-check aliases (so variants with/without 'FC' are covered)
 
-    # Add simple variants for alias keys (e.g., include keys without trailing ' FC' or ' AFC')
-    # This helps match team names coming from different APIs (with/without suffixes)
-    alias_variants = {}
-    for k, v in list(aliases.items()):
-        if k.endswith(" FC") and k[:-3] not in aliases:
-            alias_variants[k[:-3]] = v
-        if k.endswith(" AFC") and k[:-4] not in aliases:
-            alias_variants[k[:-4]] = v
-    # Merge variants into aliases for lookup
-    if alias_variants:
-        aliases.update(alias_variants)
-        # Re-check for alias match with new variants
-        if name in aliases:
-            return aliases[name].lower()
+    remove_list = [
+        " FC", " AFC", " CF", " SC", " AS ", " SSC", " RC ", " UD", " SD", " CD", " FK", " BK", 
+        " BC", " AC ", " US ", " CALCIO", " 1913", " 1909", " 1907", " 1901"
+    ]
+    
+    # Standardize some prefixes that might be at the start
+    if name.startswith("RC "): name = name[3:]
+    if name.startswith("AS "): name = name[3:]
+    if name.startswith("FC "): name = name[3:]
+    if name.startswith("UD "): name = name[3:]
+    if name.startswith("SD "): name = name[3:]
+    if name.startswith("CD "): name = name[3:]
 
+    for s in remove_list:
+        name = name.replace(s, "")
+        
+    name = name.replace("&", "AND")
+    
+    # Re-check alias mapping after cleanup (catches forms with/without suffixes)
+    if name in aliases:
+        return aliases[name].lower()
+        
     return name.strip().lower()
-
-# Markets we support from The Odds API for our usage
-SUPPORTED_MARKETS = {"h2h", "totals"}
 
 
 def sanitize_markets(markets: str) -> str:
-    """Return a sanitized comma-separated markets string containing only supported markets.
-    If no supported markets are found, defaults to 'h2h'.
+    """Normalize requested markets to supported ones.
+
+    Removes unsupported markets (e.g., btts) and falls back to 'h2h' if
+    nothing remains supported. This keeps the default behavior safe
+    when calling the external API.
     """
-    if not markets:
-        return ",".join(sorted(SUPPORTED_MARKETS))
-
-    parts = [p.strip().lower() for p in markets.split(",") if p.strip()]
-    filtered = [p for p in parts if p in SUPPORTED_MARKETS]
-    removed = [p for p in parts if p not in SUPPORTED_MARKETS]
-
-    if removed:
-        logger.warning(f"Removed unsupported markets: {removed}. Using: {filtered or ['h2h']}")
-
+    supported = ["h2h", "totals"]
+    parts = [m.strip().lower() for m in markets.split(",") if m.strip()]
+    filtered = [m for m in parts if m in supported]
     if not filtered:
-        # fallback to 'h2h' to avoid making requests that will 422
         return "h2h"
-
     return ",".join(filtered)
-
 
 class OddsApiClient:
     """
@@ -243,14 +222,11 @@ class OddsApiClient:
             logger.error("The Odds API key is missing")
             return []
 
-        # Sanitize markets to avoid requesting unsupported ones (which trigger 422)
-        sanitized = sanitize_markets(markets)
-
         url = f"{self.BASE_URL}/{sport_key}/odds/"
         params = {
             "apiKey": self.api_key,
             "regions": regions,
-            "markets": sanitized,
+            "markets": markets,
             "oddsFormat": "decimal",
             "dateFormat": "iso"
         }
@@ -317,10 +293,42 @@ class OddsApiClient:
                                     if outcome["name"].lower() == "yes": match_odds["btts"]["yes"] = outcome["price"]
                                     else: match_odds["btts"]["no"] = outcome["price"]
                         
-                        # If we found at least H2H, we can stop searching bookies
+                                # If we found at least H2H, we can stop searching bookies
                         if match_odds["1x2"]:
                             break
                 
+                # If some markets are missing (totals or btts), try to fetch from API-Football
+                if (not match_odds["ou_2.5"] or not match_odds["btts"]):
+                    try:
+                        # league id is the numeric id passed into get_all_league_odds
+                        # we'll attempt to find a matching fixture in API-Football and pull odds
+                        af_client = get_api_football_client()
+                        # locate upcoming fixtures for this league (7 day window)
+                        fixtures = await af_client.get_upcoming_fixtures(lid, days_ahead=14)
+                        target = None
+                        for f in fixtures:
+                            if normalize_team(f.home_team_name) == home_norm and normalize_team(f.away_team_name) == away_norm:
+                                target = f
+                                break
+                        # try swap (some sources may invert home/away)
+                        if not target:
+                            for f in fixtures:
+                                if normalize_team(f.home_team_name) == away_norm and normalize_team(f.away_team_name) == home_norm:
+                                    target = f
+                                    break
+
+                        if target:
+                            af_odds = await af_client.get_odds(target.fixture_id)
+                            # Merge totals
+                            if not match_odds["ou_2.5"] and af_odds.get("ou_2.5"):
+                                match_odds["ou_2.5"] = af_odds.get("ou_2.5")
+                            # Merge BTTS if available
+                            if not match_odds["btts"] and af_odds.get("btts"):
+                                match_odds["btts"] = af_odds.get("btts")
+                            logger.info(f"Merged API-Football odds for {match_id} (fixture {target.fixture_id})")
+                    except Exception as e:
+                        logger.debug(f"API-Football fallback failed for {match_id}: {e}")
+
                 all_odds[match_id] = match_odds
                 logger.info(f"Loaded REAL odds for {match_id}")
                 

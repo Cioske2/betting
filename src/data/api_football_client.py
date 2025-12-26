@@ -431,7 +431,29 @@ class APIFootballClient:
                     elif bet.get("id") == 12:
                         values = {v["value"]: float(v["odd"]) for v in bet.get("values", [])}
                         all_odds["dc"] = values
-                
+
+                    # Try to detect BTTS market (Both Teams To Score) heuristically
+                    else:
+                        # Some providers call it 'Both Teams To Score' or 'BTTS'
+                        name_lower = (bet.get("name") or "").lower()
+                        if "both" in name_lower or "btts" in name_lower or "both teams" in name_lower:
+                            vals = {v["value"]: float(v["odd"]) for v in bet.get("values", [])}
+                            # Normalize to yes/no
+                            btts = {}
+                            for k, v in vals.items():
+                                if k.lower() in ("yes", "y", "si", "sí"):
+                                    btts["yes"] = v
+                                elif k.lower() in ("no", "n"):
+                                    btts["no"] = v
+                                else:
+                                    # Sometimes values are 'Both teams to score - Yes' format
+                                    if "yes" in k.lower():
+                                        btts["yes"] = v
+                                    elif "no" in k.lower():
+                                        btts["no"] = v
+                            if btts:
+                                all_odds["btts"] = btts
+
                 # If we found odds for this bookmaker, we stop (or continue if we want merge)
                 if all_odds:
                     break
