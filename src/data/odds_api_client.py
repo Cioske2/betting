@@ -3,7 +3,6 @@ import logging
 import unicodedata
 from typing import Dict, List, Optional, Any
 from ..config import get_settings
-from src.data.api_football_client import get_client as get_api_football_client
 
 logger = logging.getLogger(__name__)
 
@@ -276,11 +275,31 @@ class OddsApiClient:
                         
                         for market in bm["markets"]:
                             if market["key"] == "h2h" and not match_odds["1x2"]:
+                                # Compare normalized team names to handle different abbreviations/aliases
+                                home_norm_local = normalize_team(match["home_team"])
+                                away_norm_local = normalize_team(match["away_team"])
                                 for outcome in market["outcomes"]:
-                                    o_name = outcome["name"].lower()
-                                    if o_name == match["home_team"].lower(): match_odds["1x2"]["1"] = outcome["price"]
-                                    elif o_name == match["away_team"].lower(): match_odds["1x2"]["2"] = outcome["price"]
-                                    elif "draw" in o_name or o_name == "x": match_odds["1x2"]["X"] = outcome["price"]
+                                    o_norm = normalize_team(outcome["name"])
+                                    # direct normalized match
+                                    if o_norm == home_norm_local:
+                                        match_odds["1x2"]["1"] = outcome["price"]
+                                    elif o_norm == away_norm_local:
+                                        match_odds["1x2"]["2"] = outcome["price"]
+                                    elif "draw" in outcome["name"].lower() or outcome["name"].lower() == "x":
+                                        match_odds["1x2"]["X"] = outcome["price"]
+                                # If we still failed to map both teams, try loose name matching
+                                if match_odds["1x2"] == {}:
+                                    for outcome in market["outcomes"]:
+                                        o_name = outcome["name"].lower()
+                                        if match["home_team"].lower() in o_name:
+                                            match_odds["1x2"]["1"] = outcome["price"]
+                                        elif match["away_team"].lower() in o_name:
+                                            match_odds["1x2"]["2"] = outcome["price"]
+                                        elif "draw" in o_name or o_name == "x":
+                                            match_odds["1x2"]["X"] = outcome["price"]
+                                # If still empty, log for debugging
+                                if match_odds["1x2"] == {}:
+                                    logger.debug(f"Could not map h2h outcomes to teams for match {match.get('id')} ({match.get('home_team')} vs {match.get('away_team')}). Outcomes: {[o['name'] for o in market.get('outcomes', [])]}")
                             
                             elif market["key"] == "totals" and not match_odds["ou_2.5"]:
                                 for outcome in market["outcomes"]:
@@ -297,37 +316,9 @@ class OddsApiClient:
                         if match_odds["1x2"]:
                             break
                 
-                # If some markets are missing (totals or btts), try to fetch from API-Football
-                if (not match_odds["ou_2.5"] or not match_odds["btts"]):
-                    try:
-                        # league id is the numeric id passed into get_all_league_odds
-                        # we'll attempt to find a matching fixture in API-Football and pull odds
-                        af_client = get_api_football_client()
-                        # locate upcoming fixtures for this league (7 day window)
-                        fixtures = await af_client.get_upcoming_fixtures(lid, days_ahead=14)
-                        target = None
-                        for f in fixtures:
-                            if normalize_team(f.home_team_name) == home_norm and normalize_team(f.away_team_name) == away_norm:
-                                target = f
-                                break
-                        # try swap (some sources may invert home/away)
-                        if not target:
-                            for f in fixtures:
-                                if normalize_team(f.home_team_name) == away_norm and normalize_team(f.away_team_name) == home_norm:
-                                    target = f
-                                    break
+                # No external API-Football fallback: use only The Odds API markets
+                # (API-Football free plan does not guarantee current season data)
 
-                        if target:
-                            af_odds = await af_client.get_odds(target.fixture_id)
-                            # Merge totals
-                            if not match_odds["ou_2.5"] and af_odds.get("ou_2.5"):
-                                match_odds["ou_2.5"] = af_odds.get("ou_2.5")
-                            # Merge BTTS if available
-                            if not match_odds["btts"] and af_odds.get("btts"):
-                                match_odds["btts"] = af_odds.get("btts")
-                            logger.info(f"Merged API-Football odds for {match_id} (fixture {target.fixture_id})")
-                    except Exception as e:
-                        logger.debug(f"API-Football fallback failed for {match_id}: {e}")
 
                 all_odds[match_id] = match_odds
                 logger.info(f"Loaded REAL odds for {match_id}")
