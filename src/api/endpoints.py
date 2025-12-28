@@ -627,44 +627,98 @@ async def get_bets(limit: int = 50):
 @router.post("/bets/sync", tags=["Betting"])
 async def sync_bet_results():
     """
-    Sync pending bet results from API-Football.
+    Sync pending bet results from Football-Data.org.
     """
     try:
         sb = get_supabase_client()
-        client = get_client()
+        fd_client = get_fd_client()
         
-        pending = sb.get_pending_selections()
-        if not pending:
+        pending_selections = sb.get_pending_selections()
+        if not pending_selections:
             return {"status": "success", "message": "No pending bets to sync"}
             
-        fixture_ids = list(set([p["fixture_id"] for p in pending]))
-        fixtures_data = await client._request("fixtures", {"ids": "-".join(map(str, fixture_ids))})
-        fixtures_map = {f["fixture"]["id"]: f for f in fixtures_data.get("response", [])}
-        
+        # Group selections by fixture_id to minimize API calls
+        from collections import defaultdict
+        fixture_to_selections = defaultdict(list)
+        for s in pending_selections:
+            fixture_to_selections[s["fixture_id"]].append(s)
+            
         updated_count = 0
-        for p in pending:
-            f = fixtures_map.get(p["fixture_id"])
-            if not f or f["fixture"]["status"]["short"] != "FT":
-                continue
+        errors = []
+        
+        import asyncio
+        for fixture_id, selections in fixture_to_selections.items():
+            try:
+                # Fetch match details from Football-Data.org
+                match = await fd_client.get_match(fixture_id)
                 
-            home_goals = f["goals"]["home"]
-            away_goals = f["goals"]["away"]
-            
-            winner = "1" if home_goals > away_goals else ("2" if home_goals < away_goals else "X")
-            
-            sel = p["selection"]
-            status = "lost"
-            if (sel in ["Home", "1"] and winner == "1") or \
-               (sel in ["Draw", "X"] and winner == "X") or \
-               (sel in ["Away", "2"] and winner == "2"):
-                status = "won"
-            
-            sb.update_selection_result(p["id"], status, status, f"{home_goals}-{away_goals}")
-            updated_count += 1
-            
-        return {"status": "success", "updated_selections": updated_count}
+                if not match:
+                    logger.warning(f"Could not find match {fixture_id} on Football-Data.org")
+                    continue
+                    
+                # We only sync finished matches
+                if match.status not in ["FINISHED", "FT"]:
+                    continue
+                    
+                home_goals = match.home_score
+                away_goals = match.away_score
+                
+                if home_goals is None or away_goals is None:
+                    continue
+                    
+                total_goals = home_goals + away_goals
+                result_str = f"{home_goals}-{away_goals}"
+                
+                for s in selections:
+                    market = (s.get("market") or "Match Winner").lower()
+                    selection = s["selection"]
+                    status = "lost"
+                    
+                    # 1X2 market
+                    if market in ["match winner", "1x2"]:
+                        winner = "1" if home_goals > away_goals else ("2" if home_goals < away_goals else "X")
+                        # Handle different labeling
+                        if (selection in ["1", "Home"] and winner == "1") or \
+                           (selection in ["X", "Draw"] and winner == "X") or \
+                           (selection in ["2", "Away"] and winner == "2"):
+                            status = "won"
+                    
+                    # Over/Under 2.5 market
+                    elif market in ["ou_2.5", "over/under 2.5"]:
+                        if (selection.lower() == "over" and total_goals > 2.5) or \
+                           (selection.lower() == "under" and total_goals < 2.5):
+                            status = "won"
+                            
+                    # BTTS market
+                    elif market in ["btts", "both teams to score"]:
+                        has_btts = home_goals > 0 and away_goals > 0
+                        if (selection.lower() == "yes" and has_btts) or \
+                           (selection.lower() == "no" and not has_btts):
+                            status = "won"
+                    
+                    # Update the selection in database
+                    sb.update_selection_result(s["id"], status, status, result_str)
+                    updated_count += 1
+                
+                # Small delay for rate limiting (10 req/min)
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Failed to sync fixture {fixture_id}: {e}")
+                errors.append(f"Fixture {fixture_id}: {str(e)}")
+        
+        # After updating selections, we should check if any bets are fully resolved
+        # (This could be done in a separate trigger or function, but adding here for simplicity)
+        # Note: sb.get_all_bets fetch also includes selections, so we can check those in the frontend
+        # or add a backend cleanup here if needed.
+        
+        return {
+            "status": "success", 
+            "updated_selections": updated_count,
+            "errors": errors if errors else None
+        }
     except Exception as e:
-        logger.error(f"Failed to sync results: {e}")
+        logger.error(f"Sync process failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -170,6 +170,44 @@ class FootballDataClient:
         logger.info(f"FD API returned {len(matches)} matches for {competition_code}")
         return matches
     
+    async def get_match(self, match_id: int) -> Optional[FDMatch]:
+        """
+        Get details for a single match.
+        
+        Args:
+            match_id: The Football-Data.org match ID
+            
+        Returns:
+            FDMatch object or None if not found
+        """
+        data = await self._request(f"matches/{match_id}")
+        if not data or "id" not in data:
+            # Handle rate limiting or errors returning empty dict/list
+            if data.get("error"):
+                logger.error(f"Error fetching match {match_id}: {data['error']}")
+            return None
+            
+        try:
+            return FDMatch(
+                match_id=data["id"],
+                competition_id=data.get("competition", {}).get("id", 0),
+                competition_name=data.get("competition", {}).get("name", "Unknown"),
+                home_team_id=data["homeTeam"]["id"],
+                home_team_name=data["homeTeam"]["name"],
+                away_team_id=data["awayTeam"]["id"],
+                away_team_name=data["awayTeam"]["name"],
+                utc_date=datetime.fromisoformat(data["utcDate"].replace("Z", "+00:00")),
+                status=data["status"],
+                home_score=data.get("score", {}).get("fullTime", {}).get("home"),
+                away_score=data.get("score", {}).get("fullTime", {}).get("away"),
+                home_win_odds=data.get("odds", {}).get("homeWin"),
+                draw_odds=data.get("odds", {}).get("draw"),
+                away_win_odds=data.get("odds", {}).get("awayWin")
+            )
+        except Exception as e:
+            logger.warning(f"Failed to parse match {match_id}: {e}")
+            return None
+    
     async def get_finished_matches(
         self,
         league_id: int,
