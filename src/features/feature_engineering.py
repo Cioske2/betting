@@ -10,11 +10,13 @@ Calculates advanced features from historical match data including:
 
 import pandas as pd
 import numpy as np
+import math
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from ..data.api_football_client import Match, TeamStats
+from ..data.market_values import get_team_value, get_expected_rank_by_value
 
 
 @dataclass
@@ -77,6 +79,21 @@ class MatchFeatures:
     home_elo: float = 1500.0
     away_elo: float = 1500.0
     
+    # Economic Hierarchy Features (Market Values)
+    home_market_value: float = 50_000_000.0  # In Euros
+    away_market_value: float = 50_000_000.0
+    log_value_diff: float = 0.0  # np.log(home_value) - np.log(away_value)
+    value_ratio: float = 1.0  # home_value / away_value
+    
+    # Performance Metrics
+    ppg_diff: float = 0.0  # Points Per Game difference (home_ppg - away_ppg)
+    rank_diff: float = 0.0  # Actual rank difference (away_rank - home_rank, positive = home higher)
+    
+    # Crisis Index (expected rank vs actual rank based on market value)
+    # Negative = wealthy team underperforming (HIGH RISK)
+    home_crisis_index: float = 0.0  # home_expected_rank - home_actual_rank
+    away_crisis_index: float = 0.0  # away_expected_rank - away_actual_rank
+    
     def to_dict(self) -> Dict:
         """Convert to dictionary for DataFrame creation."""
         return {
@@ -114,6 +131,17 @@ class MatchFeatures:
             "position_diff": self.position_diff,
             "home_elo": self.home_elo,
             "away_elo": self.away_elo,
+            # Economic hierarchy features
+            "home_market_value": self.home_market_value,
+            "away_market_value": self.away_market_value,
+            "log_value_diff": self.log_value_diff,
+            "value_ratio": self.value_ratio,
+            # Performance metrics
+            "ppg_diff": self.ppg_diff,
+            "rank_diff": self.rank_diff,
+            # Crisis index
+            "home_crisis_index": self.home_crisis_index,
+            "away_crisis_index": self.away_crisis_index,
         }
     
     def to_feature_vector(self) -> List[float]:
@@ -152,6 +180,15 @@ class MatchFeatures:
             self.position_diff,
             self.home_elo,
             self.away_elo,
+            # Economic hierarchy features
+            self.log_value_diff,
+            self.value_ratio,
+            # Performance metrics
+            self.ppg_diff,
+            self.rank_diff,
+            # Crisis index
+            self.home_crisis_index,
+            self.away_crisis_index,
         ]
     
     @staticmethod
@@ -188,6 +225,15 @@ class MatchFeatures:
             "position_diff",
             "home_elo",
             "away_elo",
+            # Economic hierarchy features
+            "log_value_diff",
+            "value_ratio",
+            # Performance metrics
+            "ppg_diff",
+            "rank_diff",
+            # Crisis index
+            "home_crisis_index",
+            "away_crisis_index",
         ]
 
 
@@ -301,6 +347,12 @@ class FeatureEngineer:
                 s_home = 0.0
             else:
                 s_home = 0.5
+            
+            # Margin of Victory Multiplier: ln(|goal_diff| + 1)
+            # Rewards/penalizes dominant wins/losses more heavily
+            goal_diff = abs(row["home_goals"] - row["away_goals"])
+            mov_multiplier = math.log(goal_diff + 1) if goal_diff > 0 else 1.0
+            k_eff = k_eff * mov_multiplier
 
             # Update ratings using effective K
             self._elo_ratings[home_id] += k_eff * (s_home - e_home)
@@ -309,6 +361,25 @@ class FeatureEngineer:
     def get_elo(self, team_id: int) -> float:
         """Get current ELO rating for a team."""
         return self._elo_ratings.get(team_id, 1500.0)
+    
+    def get_prediction_elo(self, team_id: int, is_home: bool = False) -> float:
+        """
+        Get ELO rating for prediction with dynamic home advantage.
+        
+        Adds +80 points to home team's ELO during probability calculation only.
+        This boost is NOT persisted in the database.
+        
+        Args:
+            team_id: The team ID
+            is_home: Whether this is the home team
+            
+        Returns:
+            ELO rating (with +80 boost if home)
+        """
+        base_elo = self._elo_ratings.get(team_id, 1500.0)
+        if is_home:
+            return base_elo + 80.0  # Dynamic home advantage for predictions
+        return base_elo
     
     def _calculate_league_averages(self) -> None:
         """Calculate league-wide averages for strength ratings."""
@@ -589,7 +660,8 @@ class FeatureEngineer:
         self,
         match: Match,
         h2h_matches: Optional[List[Match]] = None,
-        standings: Optional[List[Dict]] = None
+        standings: Optional[List[Dict]] = None,
+        for_prediction: bool = False
     ) -> MatchFeatures:
         """
         Calculate all features for a match.
@@ -598,6 +670,7 @@ class FeatureEngineer:
             match: The match to calculate features for
             h2h_matches: Optional list of head-to-head matches
             standings: Optional current league standings
+            for_prediction: Whether these features are for a real-time prediction (adds ELO boost)
             
         Returns:
             MatchFeatures object with all calculated features
@@ -668,8 +741,12 @@ class FeatureEngineer:
         features.away_defense_strength = away_def
         
         # ELO Ratings
-        features.home_elo = self.get_elo(match.home_team_id)
-        features.away_elo = self.get_elo(match.away_team_id)
+        if for_prediction:
+            features.home_elo = self.get_prediction_elo(match.home_team_id, is_home=True)
+            features.away_elo = self.get_prediction_elo(match.away_team_id, is_home=False)
+        else:
+            features.home_elo = self.get_elo(match.home_team_id)
+            features.away_elo = self.get_elo(match.away_team_id)
         
         # Head-to-head
         if h2h_matches:
@@ -693,6 +770,35 @@ class FeatureEngineer:
                 10
             )
             features.position_diff = away_pos - home_pos  # Positive = home team higher
+            features.rank_diff = float(away_pos - home_pos)
+            
+            # Calculate PPG diff (Points Per Game difference)
+            home_matches_count = max(1, home_form.get("matches", 1))
+            away_matches_count = max(1, away_form.get("matches", 1))
+            home_ppg = home_form["points"]  # Already averaged
+            away_ppg = away_form["points"]  # Already averaged
+            features.ppg_diff = home_ppg - away_ppg
+            
+            # Calculate Crisis Index
+            # Get list of teams in standings for expected rank calculation
+            league_teams = [s.get("team_name", "") for s in standings]
+            
+            home_expected_rank = get_expected_rank_by_value(match.home_team_name, league_teams)
+            away_expected_rank = get_expected_rank_by_value(match.away_team_name, league_teams)
+            
+            # Crisis Index: expected_rank - actual_rank
+            # Negative = wealthy team underperforming (HIGH RISK)
+            features.home_crisis_index = float(home_expected_rank - home_pos)
+            features.away_crisis_index = float(away_expected_rank - away_pos)
+        
+        # Economic Hierarchy Features (Market Values)
+        home_value = get_team_value(match.home_team_name)
+        away_value = get_team_value(match.away_team_name)
+        
+        features.home_market_value = home_value
+        features.away_market_value = away_value
+        features.log_value_diff = np.log(home_value) - np.log(away_value)
+        features.value_ratio = home_value / away_value
         
         return features
     
@@ -700,7 +806,8 @@ class FeatureEngineer:
         self,
         matches: List[Match],
         h2h_dict: Optional[Dict[int, List[Match]]] = None,
-        standings: Optional[List[Dict]] = None
+        standings: Optional[List[Dict]] = None,
+        for_prediction: bool = False
     ) -> pd.DataFrame:
         """
         Calculate features for multiple matches.
@@ -709,6 +816,7 @@ class FeatureEngineer:
             matches: List of matches
             h2h_dict: Dictionary mapping fixture_id to h2h matches
             standings: League standings
+            for_prediction: Whether these features are for a real-time prediction
             
         Returns:
             DataFrame with features for all matches
@@ -717,7 +825,7 @@ class FeatureEngineer:
         
         for match in matches:
             h2h = h2h_dict.get(match.fixture_id) if h2h_dict else None
-            features = self.calculate_features(match, h2h, standings)
+            features = self.calculate_features(match, h2h, standings, for_prediction=for_prediction)
             features_list.append(features.to_dict())
         
         return pd.DataFrame(features_list)

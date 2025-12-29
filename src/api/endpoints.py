@@ -449,129 +449,213 @@ async def get_upcoming_matches_with_predictions(
                     "away_goals": m.away_score,
                     "date": m.utc_date
                 })
+        for f in upcoming_matches:
+            lid = getattr(f, 'league_id', getattr(f, 'competition_id', None))
+            standings = standings_map.get(lid)
             
-            for f in fd_fixtures:
+            # Predict
+            try:
+                home_rank = next((s["rank"] for s in standings if s["team_id"] == f.home_team_id), None) if standings else None
+                away_rank = next((s["rank"] for s in standings if s["team_id"] == f.away_team_id), None) if standings else None
+                
+                # Build feature object
+                features = None
                 try:
-                    # Filter history for these teams
-                    home_l5 = [m for m in history_dicts if m["home_team_id"] == f.home_team_id or m["away_team_id"] == f.home_team_id][:5]
-                    away_l5 = [m for m in history_dicts if m["home_team_id"] == f.away_team_id or m["away_team_id"] == f.away_team_id][:5]
-                    
-                    # Build feature object (includes ELO)
-                    features = None
-                    try:
-                        features = feature_eng.calculate_features(f, None, standings)
-                    except Exception as e:
-                        logger.warning(f"Failed to calculate features for fixture {f.match_id}: {e}")
-                    
-                    # Predictions
-                    prediction = ensemble.predict(
-                        home_team_id=f.home_team_id,
-                        away_team_id=f.away_team_id,
-                        home_team_name=f.home_team_name,
-                        away_team_name=f.away_team_name,
-                        league_id=lid,
-                        features=features,
-                        home_last_5=home_l5,
-                        away_last_5=away_l5
-                    )
-                    
-                    # Get ranks from standings
-                    home_rank = next((s["rank"] for s in standings if s["team_id"] == f.home_team_id), None)
-                    away_rank = next((s["rank"] for s in standings if s["team_id"] == f.away_team_id), None)
-                    
-                    poisson_pred = ensemble.poisson.predict(f.home_team_id, home_l5, f.away_team_id, away_l5)
-                    
-                    # 1. Start with DEFAULTS (FD.org for 1X2, Fair Odds for others)
-                    odds_1x2 = {
-                        "1": f.home_win_odds or 1.0,
-                        "X": f.draw_odds or 1.0,
-                        "2": f.away_win_odds or 1.0
-                    }
-                    
-                    margin = 0.93
-                    ou_odds = {
-                        "over": round((1.0 / max(0.01, poisson_pred.over_25_prob)) * margin, 2),
-                        "under": round((1.0 / max(0.01, poisson_pred.under_25_prob)) * margin, 2)
-                    }
-                    btts_odds = {
-                        "yes": round((1.0 / max(0.01, poisson_pred.btts_yes_prob)) * margin, 2),
-                        "no": round((1.0 / max(0.01, poisson_pred.btts_no_prob)) * margin, 2)
-                    }
+                    features = feature_eng.calculate_features(f, None, standings, for_prediction=True)
+                except Exception as e:
+                    logger.warning(f"Failed to calculate features for fixture {f.match_id}: {e}")
+                
+                prediction = ensemble.predict(
+                    home_team_id=f.home_team_id,
+                    away_team_id=f.away_team_id,
+                    home_team_name=f.home_team_name,
+                    away_team_name=f.away_team_name,
+                    league_id=lid,
+                    features=features
+                )
+                
+                poisson_pred = ensemble.poisson.predict(f.home_team_id, [], f.away_team_id, [])
+                
+                # Get real odds if available
+                odds_1x2 = {"1": 1.0, "X": 1.0, "2": 1.0}
+                ou_odds = {"over": 1.0, "under": 1.0}
+                btts_odds = {"yes": 1.0, "no": 1.0}
+                
+                try:
+                    match_odds = await client.get_odds(fixture_id=f.match_id)
+                    if match_odds:
+                        best_o = match_odds[0]
+                        odds_1x2 = {"1": best_o.home_win, "X": best_o.draw, "2": best_o.away_win}
+                        # Add O/U and BTTS odds if available (stubbed for now)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch odds for {f.match_id}: {e}")
 
-                    # 2. Try to fetch REAL odds from The Odds API
-                    # Key normalization: home_vs_away
-                    h_norm = normalize_team(f.home_team_name)
-                    a_norm = normalize_team(f.away_team_name)
-                    match_key = f"{h_norm}_vs_{a_norm}"
-                    real_odds = all_league_odds.get(match_key)
-                    
-                    if real_odds:
-                        # Only overwrite if real odds for that market are actually found
-                        if real_odds.get("1x2"): odds_1x2 = real_odds["1x2"]
-                        if real_odds.get("ou_2.5"): ou_odds = real_odds["ou_2.5"]
-                        if real_odds.get("btts"): btts_odds = real_odds["btts"]
-                        logger.info(f"Using REAL odds for {match_key} ({f.home_team_name} vs {f.away_team_name})")
-                    else:
-                        logger.warning(f"No REAL odds for {match_key}, using FD.org/Fair Odds fallback")
-                    
-                    match_result = {
-                        "fixture_id": f.match_id,
-                        "teams": {
-                            "home": f.home_team_name, 
-                            "away": f.away_team_name,
-                            "home_elo": round(prediction.home_elo, 1) if prediction.home_elo else None,
-                            "away_elo": round(prediction.away_elo, 1) if prediction.away_elo else None,
-                            "home_rank": home_rank,
-                            "away_rank": away_rank
+                match_result = {
+                    "fixture_id": f.match_id,
+                    "teams": {
+                        "home": f.home_team_name, 
+                        "away": f.away_team_name,
+                        "home_elo": round(prediction.home_elo, 1) if prediction.home_elo else None,
+                        "away_elo": round(prediction.away_elo, 1) if prediction.away_elo else None,
+                        "home_rank": home_rank,
+                        "away_rank": away_rank
+                    },
+                    "date": f.utc_date.isoformat() if hasattr(f.utc_date, 'isoformat') else f.utc_date,
+                    "league_id": lid,
+                    "predictions": {
+                        "1x2": {
+                            "1": round(prediction.home_win_pct / 100, 4),
+                            "X": round(prediction.draw_pct / 100, 4),
+                            "2": round(prediction.away_win_pct / 100, 4)
                         },
-                        "date": f.utc_date.isoformat() if hasattr(f.utc_date, 'isoformat') else f.utc_date,
-                        "league_id": lid,
-                        "predictions": {
-                            "1x2": {
-                                "1": round(prediction.home_win_pct / 100, 4),
-                                "X": round(prediction.draw_pct / 100, 4),
-                                "2": round(prediction.away_win_pct / 100, 4)
-                            },
-                            "goals": {
-                                "over_2.5": round(poisson_pred.over_25_prob, 4),
-                                "under_2.5": round(poisson_pred.under_25_prob, 4)
-                            },
-                            "btts": {
-                                "yes": round(poisson_pred.btts_yes_prob, 4),
-                                "no": round(poisson_pred.btts_no_prob, 4)
-                            }
+                        "goals": {
+                            "over_2.5": round(poisson_pred.over_25_prob, 4),
+                            "under_2.5": round(poisson_pred.under_25_prob, 4)
                         },
-                        "odds": {
-                            "1x2": odds_1x2,
-                            "ou_2.5": ou_odds,
-                            "btts": btts_odds # Changed from 'dc' to 'btts' to match user request
-                        },
-                        "ev": {}
+                        "btts": {
+                            "yes": round(poisson_pred.btts_yes_prob, 4),
+                            "no": round(poisson_pred.btts_no_prob, 4)
+                        }
+                    },
+                    "odds": {
+                        "1x2": odds_1x2,
+                        "ou_2.5": ou_odds,
+                        "btts": btts_odds
+                    },
+                    "ev": {}
+                }
+                
+                # EV calculation
+                prob_home = prediction.home_win_pct / 100
+                prob_draw = prediction.draw_pct / 100
+                prob_away = prediction.away_win_pct / 100
+                
+                match_result["ev"] = {
+                    "1": round(prob_home * odds_1x2.get("1", 0), 2),
+                    "X": round(prob_draw * odds_1x2.get("X", 0), 2),
+                    "2": round(prob_away * odds_1x2.get("2", 0), 2),
+                }
+                
+                prob_1x = prob_home + prob_draw
+                prob_x2 = prob_draw + prob_away
+                prob_12 = prob_home + prob_away
+                
+                match_result["double_chance"] = {
+                    "1X": round(prob_1x, 4),
+                    "X2": round(prob_x2, 4),
+                    "12": round(prob_12, 4)
+                }
+                
+                match_result["fair_odds"] = {
+                    "1x2": {
+                        "1": round(1.0 / max(0.01, prob_home), 2),
+                        "X": round(1.0 / max(0.01, prob_draw), 2),
+                        "2": round(1.0 / max(0.01, prob_away), 2)
+                    },
+                    "double_chance": {
+                        "1X": round(1.0 / max(0.01, prob_1x), 2),
+                        "X2": round(1.0 / max(0.01, prob_x2), 2),
+                        "12": round(1.0 / max(0.01, prob_12), 2)
                     }
+                }
+                
+                import math
+                p_safe = [max(0.001, prob_home), max(0.001, prob_draw), max(0.001, prob_away)]
+                entropy = -sum(p * math.log(p) for p in p_safe)
+                
+                p_poisson = [poisson_pred.home_win_prob, poisson_pred.draw_prob, poisson_pred.away_win_prob]
+                p_xgb = [prob_home, prob_draw, prob_away]
+                disagreement = max(abs(p - x) for p, x in zip(p_poisson, p_xgb))
+                
+                max_prob = max(prob_home, prob_draw, prob_away)
+                action = "BET"
+                if entropy > 1.05 or disagreement > 0.20 or max_prob < 0.45:
+                    action = "SKIP"
                     
-                    # EV calculation
-                    match_result["ev"] = {
-                        # 1X2 EV
-                        "1": round((prediction.home_win_pct / 100) * odds_1x2.get("1", 0), 2),
-                        "X": round((prediction.draw_pct / 100) * odds_1x2.get("X", 0), 2),
-                        "2": round((prediction.away_win_pct / 100) * odds_1x2.get("2", 0), 2),
-                        # O/U EV
-                        "over_2.5": round(poisson_pred.over_25_prob * ou_odds.get("over", 0), 2),
-                        "under_2.5": round(poisson_pred.under_25_prob * ou_odds.get("under", 0), 2),
-                        # BTTS EV
-                        "btts_yes": round(poisson_pred.btts_yes_prob * btts_odds.get("yes", 0), 2),
-                        "btts_no": round(poisson_pred.btts_no_prob * btts_odds.get("no", 0), 2)
-                    }
+                match_result["advisor"] = {
+                    "action": action,
+                    "entropy": round(entropy, 4),
+                    "model_disagreement": round(disagreement, 4),
+                    "max_probability": round(max_prob, 4)
+                }
 
-                    all_matches.append(match_result)
-                except Exception as fixture_error:
-                    logger.error(f"Error processing fixture {f.match_id}: {fixture_error}")
-                    continue
-        
+                all_matches.append(match_result)
+            except Exception as fixture_error:
+                logger.error(f"Error processing fixture {f.match_id}: {fixture_error}")
+                continue
+                
         return {"matches": all_matches}
     except Exception as e:
-        logger.error(f"Failed to fetch upcoming matches: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Predictions core failed: {e}")
+        return {"matches": [], "error": str(e)}
+
+@router.get("/upcoming-matches", tags=["Predictions"])
+async def get_upcoming_matches_with_predictions(days: int = 2):
+    """Get upcoming matches with ensemble predictions and value bet calculation."""
+    result = await _get_predictions_core(days=days)
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
+@router.get("/v1/recommendations/safe-accumulator", tags=["Recommendations"])
+async def get_safe_accumulator(days: int = 2):
+    """
+    Generate a 'Safe' Accumulator betting slip.
+    Selects top 4 matches based on risk analysis and high probabilities.
+    """
+    result = await _get_predictions_core(days=days)
+    matches = result.get("matches", [])
+    
+    candidates = []
+    for m in matches:
+        # Filter 1: No SKIP matches
+        if m.get("advisor", {}).get("action") == "SKIP":
+            continue
+            
+        probs = m["predictions"]["1x2"]
+        dc = m["double_chance"]
+        
+        sel = None
+        p = 0
+        
+        # Smart Selection Logic
+        if probs["1"] > 0.75:
+            sel, p = "1", probs["1"]
+        elif dc["1X"] > 0.85:
+            sel, p = "1X", dc["1X"]
+        elif probs["2"] > 0.75:
+            sel, p = "2", probs["2"]
+        elif dc["X2"] > 0.85:
+            sel, p = "X2", dc["X2"]
+            
+        if sel:
+            candidates.append({
+                "fixture_id": m["fixture_id"],
+                "teams": m["teams"],
+                "selection": sel,
+                "probability": p,
+                "fair_odd": m["fair_odds"]["1x2" if len(sel)==1 else "double_chance"][sel]
+            })
+            
+    # Sort by probability descending
+    candidates.sort(key=lambda x: x["probability"], reverse=True)
+    top_4 = candidates[:4]
+    
+    if not top_4:
+        return {"count": 0, "message": "No safe candidates found for the next 48h", "selections": []}
+        
+    total_p = 1.0
+    total_o = 1.0
+    for c in top_4:
+        total_p *= c["probability"]
+        total_o *= c["fair_odd"]
+        
+    return {
+        "count": len(top_4),
+        "total_probability": round(total_p, 4),
+        "estimated_total_odd": round(total_o, 2),
+        "selections": top_4
+    }
 
 class BetSelection(BaseModel):
     fixture_id: int
