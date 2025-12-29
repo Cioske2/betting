@@ -393,20 +393,20 @@ async def analyze_value_bet(request: ValueBetRequest):
     )
 
 
-@router.get("/upcoming-matches", tags=["Data"])
-async def get_upcoming_matches_with_predictions(
-    league_ids: str = Query(default="39", description="Comma-separated League IDs"),
-    days: int = Query(default=2, ge=1, le=14, description="Days ahead")
+async def _get_predictions_core(
+    league_ids: str = "39",
+    days: int = 2
 ):
     """
     Get upcoming matches with dynamic Poisson predictions and real-time odds for multiple leagues.
+    Internal core function used by multiple endpoints.
     """
     fd_client = get_fd_client()
     odds_client = get_odds_api_client()
     ensemble = get_ensemble()
+    feature_eng = get_feature_engineer()
     
     try:
-        sb = get_supabase_client()
         ids = [int(i.strip()) for i in league_ids.split(",") if i.strip()]
         
         # 1. Fetch real-time odds for all leagues upfront to minimize API calls
@@ -418,38 +418,29 @@ async def get_upcoming_matches_with_predictions(
         season = current_year if datetime.now().month >= 8 else current_year - 1
         
         all_matches = []
+        all_upcoming_fixtures = []
+        standings_map = {}
+        
         for lid in ids:
             # 1. Get upcoming fixtures from Football-Data.org (Reliable)
             fd_fixtures = await fd_client.get_upcoming_matches(league_id=lid, days_ahead=days)
+            if fd_fixtures:
+                all_upcoming_fixtures.extend(fd_fixtures)
             
-            if not fd_fixtures:
-                continue
-                
             # 2. Get finished matches for team strength from Football-Data.org
             finished_matches = await fd_client.get_finished_matches(league_id=lid, season=season)
             
             # 3. Get current standings
             standings = await fd_client.get_standings(league_id=lid, season=season)
+            standings_map[lid] = standings
             
-            # Load finished matches into feature engineer so we can compute ELO and other features
-            feature_eng = get_feature_engineer()
+            # Load finished matches into feature engineer
             try:
-                # load_matches handles both Match and FDMatch types
                 feature_eng.load_matches(finished_matches)
             except Exception as e:
                 logger.warning(f"Failed to load matches into feature engineer for league {lid}: {e}")
-            
-            # Convert FDMatch to dict for Poisson model
-            history_dicts = []
-            for m in finished_matches:
-                history_dicts.append({
-                    "home_team_id": m.home_team_id,
-                    "away_team_id": m.away_team_id,
-                    "home_goals": m.home_score,
-                    "away_goals": m.away_score,
-                    "date": m.utc_date
-                })
-        for f in upcoming_matches:
+        
+        for f in all_upcoming_fixtures:
             lid = getattr(f, 'league_id', getattr(f, 'competition_id', None))
             standings = standings_map.get(lid)
             
@@ -476,19 +467,24 @@ async def get_upcoming_matches_with_predictions(
                 
                 poisson_pred = ensemble.poisson.predict(f.home_team_id, [], f.away_team_id, [])
                 
-                # Get real odds if available
+                # Get real odds from the pre-fetched all_league_odds
                 odds_1x2 = {"1": 1.0, "X": 1.0, "2": 1.0}
                 ou_odds = {"over": 1.0, "under": 1.0}
                 btts_odds = {"yes": 1.0, "no": 1.0}
                 
-                try:
-                    match_odds = await client.get_odds(fixture_id=f.match_id)
-                    if match_odds:
-                        best_o = match_odds[0]
-                        odds_1x2 = {"1": best_o.home_win, "X": best_o.draw, "2": best_o.away_win}
-                        # Add O/U and BTTS odds if available (stubbed for now)
-                except Exception as e:
-                    logger.warning(f"Failed to fetch odds for {f.match_id}: {e}")
+                # Match odds from odds-api
+                home_norm = normalize_team(f.home_team_name)
+                away_norm = normalize_team(f.away_team_name)
+                
+                match_odds = None
+                for o in all_league_odds:
+                    if (normalize_team(o.home_team) == home_norm and normalize_team(o.away_team) == away_norm) or \
+                       (normalize_team(o.home_team) == away_norm and normalize_team(o.away_team) == home_norm):
+                        match_odds = o
+                        break
+                
+                if match_odds:
+                    odds_1x2 = {"1": match_odds.home_win, "X": match_odds.draw, "2": match_odds.away_win}
 
                 match_result = {
                     "fixture_id": f.match_id,
@@ -589,9 +585,24 @@ async def get_upcoming_matches_with_predictions(
         logger.error(f"Predictions core failed: {e}")
         return {"matches": [], "error": str(e)}
 
+
+@router.get("/upcoming-matches-with-predictions", tags=["Predictions"])
+async def get_upcoming_matches_with_predictions(
+    league_ids: str = Query(default="39", description="Comma-separated League IDs"),
+    days: int = Query(default=2, ge=1, le=14, description="Days ahead")
+):
+    """
+    Get upcoming matches with ensemble predictions and value bet calculation.
+    """
+    result = await _get_predictions_core(league_ids=league_ids, days=days)
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
+
 @router.get("/upcoming-matches", tags=["Predictions"])
-async def get_upcoming_matches_with_predictions(days: int = 2):
-    """Get upcoming matches with ensemble predictions and value bet calculation."""
+async def get_upcoming_matches_v1(days: int = 2):
+    """Get upcoming matches for backward compatibility."""
     result = await _get_predictions_core(days=days)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
