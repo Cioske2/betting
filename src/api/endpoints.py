@@ -601,20 +601,36 @@ async def get_upcoming_matches_with_predictions(
 
 
 @router.get("/upcoming-matches", tags=["Predictions"])
-async def get_upcoming_matches_v1(days: int = 2):
-    """Get upcoming matches for backward compatibility."""
-    result = await _get_predictions_core(days=days)
+async def get_upcoming_matches_v1(
+    league_ids: Optional[str] = Query(default=None, description="Comma-separated League IDs"),
+    days: int = Query(default=2, ge=1, le=14, description="Days ahead")
+):
+    """Get upcoming matches with ensemble predictions."""
+    # Use all configured leagues if none provided
+    if not league_ids:
+        settings = get_settings()
+        league_ids = ",".join(map(str, settings.league_ids))
+        
+    result = await _get_predictions_core(league_ids=league_ids, days=days)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
     return result
 
 @router.get("/v1/recommendations/safe-accumulator", tags=["Recommendations"])
-async def get_safe_accumulator(days: int = 2):
+async def get_safe_accumulator(
+    league_ids: Optional[str] = Query(default=None, description="Comma-separated League IDs"),
+    days: int = Query(default=2, ge=1, le=14, description="Days ahead")
+):
     """
     Generate a 'Safe' Accumulator betting slip.
     Selects top 4 matches based on risk analysis and high probabilities.
     """
-    result = await _get_predictions_core(days=days)
+    # Use all configured leagues if none provided
+    if not league_ids:
+        settings = get_settings()
+        league_ids = ",".join(map(str, settings.league_ids))
+        
+    result = await _get_predictions_core(league_ids=league_ids, days=days)
     matches = result.get("matches", [])
     
     candidates = []
@@ -1257,97 +1273,7 @@ async def train_models_background(settings):
         print(f"🏁 Training finished. Status: training_in_progress={is_training()}")
 
 
-@router.get("/upcoming-matches", tags=["Data"])
-async def get_upcoming_matches(
-    league_ids: Optional[str] = Query(
-        default=None,
-        description="Comma-separated league IDs (e.g., '39,140,135'). If not provided, uses all configured leagues."
-    ),
-    days_ahead: int = Query(
-        default=7,
-        ge=1,
-        le=30,
-        description="Number of days to look ahead"
-    )
-):
-    """
-    Get all upcoming matches for specified leagues.
-    
-    Uses football-data.org API for current season data.
-    Returns scheduled matches that haven't been played yet.
-    """
-    settings = get_settings()
-    fd_client = get_fd_client()
-    
-    # Parse league IDs
-    if league_ids:
-        target_leagues = [int(lid.strip()) for lid in league_ids.split(",")]
-    else:
-        target_leagues = settings.league_ids
-    
-    try:
-        all_upcoming = []
-        from datetime import datetime, timedelta, timezone
-        max_date = datetime.now(timezone.utc) + timedelta(days=days_ahead)
-        
-        for league_id in target_leagues:
-            logger.info(f"Fetching upcoming matches for league {league_id} from football-data.org...")
-            
-            # Fetch standings for this league to get ranks
-            standings_data = await fd_client.get_standings(league_id=league_id)
-            ranks = {s["team_id"]: s["rank"] for s in standings_data}
-            
-            # Use football-data.org for upcoming matches
-            matches = await fd_client.get_upcoming_matches(
-                league_id=league_id,
-                limit=50  # Increased limit to allow for filtering
-            )
-            
-            for match in matches:
-                # Filter by days_ahead
-                if match.utc_date > max_date:
-                    continue
-                    
-                all_upcoming.append({
-                    "fixture_id": match.match_id,
-                    "date": match.utc_date.isoformat(),
-                    "league": {
-                        "id": match.competition_id,
-                        "name": match.competition_name
-                    },
-                    "home_team": {
-                        "id": match.home_team_id,
-                        "name": match.home_team_name,
-                        "rank": ranks.get(match.home_team_id)
-                    },
-                    "away_team": {
-                        "id": match.away_team_id,
-                        "name": match.away_team_name,
-                        "rank": ranks.get(match.away_team_id)
-                    },
-                    "status": match.status
-                })
-            
-            logger.info(f"Found {len(matches)} upcoming matches for league {league_id}")
-        
-        # Sort by date (nearest first)
-        all_upcoming.sort(key=lambda x: x["date"])
-        
-        return {
-            "count": len(all_upcoming),
-            "leagues": [
-                {
-                    "id": lid,
-                    "name": LEAGUE_INFO.get(lid, {}).get("name", "Unknown")
-                }
-                for lid in target_leagues
-            ],
-            "days_ahead": days_ahead,
-            "matches": all_upcoming
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch upcoming matches: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Removed duplicate /upcoming-matches endpoint to avoid conflicts with the prediction-enabled one.
 
 
 @router.get("/odds/{fixture_id}", tags=["Data"])
