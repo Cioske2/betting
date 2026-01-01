@@ -63,13 +63,16 @@ def save_models(ensemble: EnsemblePredictor, feature_eng: FeatureEngineer) -> No
     """Save trained models to disk."""
     MODEL_DIR.mkdir(exist_ok=True)
     
-    # Save Poisson model
+    # Save Poisson model (pickle is fine as it's a simple dataclass-like object)
     with open(POISSON_PATH, "wb") as f:
         pickle.dump(ensemble.poisson, f)
     
-    # Save XGBoost model  
-    with open(XGBOOST_PATH, "wb") as f:
-        pickle.dump(ensemble.xgboost, f)
+    # Save XGBoost model using its native save method (handles state dict properly)
+    # The .save() method automatically adds .pkl extension, so we strip it if present
+    xgb_path_str = str(XGBOOST_PATH)
+    if xgb_path_str.endswith('.pkl'):
+        xgb_path_str = xgb_path_str[:-4]
+    ensemble.xgboost.save(xgb_path_str)
     
     # Save feature engineer
     with open(FEATURE_ENG_PATH, "wb") as f:
@@ -88,8 +91,15 @@ def load_models(ensemble: EnsemblePredictor) -> bool:
         with open(POISSON_PATH, "rb") as f:
             ensemble.poisson = pickle.load(f)
         
-        with open(XGBOOST_PATH, "rb") as f:
-            ensemble.xgboost = pickle.load(f)
+        # Load XGBoost using native load method
+        # We need to instantiate a fresh predictor then load state into it
+        # This prevents the 'dict has no attribute is_fitted' bug
+        xgb_path_str = str(XGBOOST_PATH)
+        if xgb_path_str.endswith('.pkl'):
+            xgb_path_str = xgb_path_str[:-4]
+            
+        ensemble.xgboost = XGBoostPredictor()
+        ensemble.xgboost.load(xgb_path_str)
         
         logger.info("Models loaded from disk")
         return True
@@ -236,7 +246,9 @@ class HealthResponse(BaseModel):
     """Response model for health check."""
     status: str
     models: Dict[str, Any]
+    feature_engineer: Optional[Dict[str, Any]] = None
     api_configured: bool
+    training_in_progress: bool = False
     timestamp: str
 
 
@@ -252,9 +264,20 @@ async def health_check():
     settings = get_settings()
     ensemble = get_ensemble()
     
+    # Feature Engineer stats for debugging production data
+    feature_eng = get_feature_engineer()
+    fe_stats = {
+        "loaded_matches": len(feature_eng._matches_df) if feature_eng._matches_df is not None else 0,
+        "elo_ratings_count": len(feature_eng._elo_ratings),
+        "season_decay": getattr(feature_eng, "season_decay", "missing"),
+        "k_factor": getattr(feature_eng, "_elo_k_factor", "missing"),
+        "leagues_data": feature_eng._matches_df["league_id"].value_counts().to_dict() if feature_eng._matches_df is not None else {}
+    }
+    
     return {
         "status": "healthy",
         "models": ensemble.get_model_status(),
+        "feature_engineer": fe_stats,
         "api_configured": bool(settings.api_football_key),
         "training_in_progress": is_training(),
         "timestamp": datetime.now().isoformat()
@@ -511,21 +534,25 @@ async def _get_predictions_core(
                 home_norm = normalize_team(f.home_team_name)
                 away_norm = normalize_team(f.away_team_name)
                 
-                # Build match key to lookup in odds dict (format: "team1_vs_team2")
+                # NOTE: Key format must match odds_api_client.get_all_league_odds
                 match_key = f"{home_norm}_vs_{away_norm}".lower()
                 match_key_reverse = f"{away_norm}_vs_{home_norm}".lower()
                 
                 match_odds = all_league_odds.get(match_key) or all_league_odds.get(match_key_reverse)
                 
-                if match_odds and match_odds.get("1x2"):
-                    odds_1x2 = match_odds["1x2"]
+                if match_odds:
+                    if match_odds.get("1x2"):
+                        odds_1x2 = match_odds["1x2"]
                     if match_odds.get("ou_2.5"):
                         ou_odds = match_odds["ou_2.5"]
                     if match_odds.get("btts"):
                         btts_odds = match_odds["btts"]
-                    logger.info(f"✓ Matched odds for {f.home_team_name} vs {f.away_team_name}: 1={odds_1x2.get('1')}, X={odds_1x2.get('X')}, 2={odds_1x2.get('2')}")
+                    logger.info(f"✓ Matched odds for {f.home_team_name} vs {f.away_team_name}")
                 else:
-                    logger.warning(f"✗ No odds found for {f.home_team_name} vs {f.away_team_name} (keys tried: {match_key}, {match_key_reverse})")
+                    logger.warning(
+                        f"✗ No odds found for {f.home_team_name} vs {f.away_team_name}. "
+                        f"Keys tried: ['{match_key}', '{match_key_reverse}']"
+                    )
 
                 match_result = {
                     "fixture_id": f.match_id,
