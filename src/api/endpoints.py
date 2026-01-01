@@ -126,6 +126,15 @@ def get_feature_engineer() -> FeatureEngineer:
             try:
                 with open(FEATURE_ENG_PATH, "rb") as f:
                     _feature_engineer = pickle.load(f)
+                
+                # Migration for old models
+                if not hasattr(_feature_engineer, "season_decay"):
+                    _feature_engineer.season_decay = 0.85
+                if not hasattr(_feature_engineer, "_elo_k_factor"):
+                    _feature_engineer._elo_k_factor = 32
+                if not hasattr(_feature_engineer, "_elo_home_advantage"):
+                    _feature_engineer._elo_home_advantage = 50
+                    
                 logger.info("Feature engineer loaded from disk")
             except Exception as e:
                 logger.warning(f"Failed to load feature engineer: {e}")
@@ -137,6 +146,15 @@ def get_feature_engineer() -> FeatureEngineer:
         try:
             with open(FEATURE_ENG_PATH, "rb") as f:
                 _feature_engineer = pickle.load(f)
+            
+            # Migration for reloaded model
+            if not hasattr(_feature_engineer, "season_decay"):
+                _feature_engineer.season_decay = 0.85
+            if not hasattr(_feature_engineer, "_elo_k_factor"):
+                _feature_engineer._elo_k_factor = 32
+            if not hasattr(_feature_engineer, "_elo_home_advantage"):
+                _feature_engineer._elo_home_advantage = 50
+
             logger.info("Feature engineer reloaded from disk")
         except Exception as e:
             logger.warning(f"Failed to reload feature engineer: {e}")
@@ -494,8 +512,8 @@ async def _get_predictions_core(
                 away_norm = normalize_team(f.away_team_name)
                 
                 # Build match key to lookup in odds dict (format: "team1_vs_team2")
-                match_key = f"{home_norm}_vs_{away_norm}"
-                match_key_reverse = f"{away_norm}_vs_{home_norm}"
+                match_key = f"{home_norm}_vs_{away_norm}".lower()
+                match_key_reverse = f"{away_norm}_vs_{home_norm}".lower()
                 
                 match_odds = all_league_odds.get(match_key) or all_league_odds.get(match_key_reverse)
                 
