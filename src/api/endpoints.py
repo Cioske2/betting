@@ -21,6 +21,7 @@ from ..data.football_data_client import get_fd_client, FDMatch
 from ..data.odds_api_client import get_odds_api_client, normalize_team
 from ..features.feature_engineering import FeatureEngineer, MatchFeatures
 from ..models.ensemble import EnsemblePredictor
+from ..models.xgboost_model import XGBoostPredictor
 from ..betting.value_bet import ValueBetAnalyzer
 from ..data.supabase_client import get_supabase_client
 
@@ -514,13 +515,19 @@ async def _get_predictions_core(
                 except Exception as e:
                     logger.warning(f"Failed to calculate features for fixture {f.match_id}: {e}")
                 
+                # Get recent matches for Poisson dynamic mode
+                home_last_10 = feature_eng.get_last_n_matches(f.home_team_id, n=10)
+                away_last_10 = feature_eng.get_last_n_matches(f.away_team_id, n=10)
+                
                 prediction = ensemble.predict(
                     home_team_id=f.home_team_id,
                     away_team_id=f.away_team_id,
                     home_team_name=f.home_team_name,
                     away_team_name=f.away_team_name,
                     league_id=lid,
-                    features=features
+                    features=features,
+                    home_last_5=home_last_10,  # Using argument name from ensemble.py but passing 10
+                    away_last_5=away_last_10
                 )
                 
                 poisson_pred = ensemble.poisson.predict(f.home_team_id, [], f.away_team_id, [])

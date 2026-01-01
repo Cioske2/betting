@@ -345,13 +345,25 @@ class XGBoostPredictor:
         with open(f"{path}.pkl", "rb") as f:
             state = pickle.load(f)
         
-        self._model = state["model"]
-        self._calibrated_model = state["calibrated_model"]
-        self._feature_names = state["feature_names"]
-        self.params = state["params"]
-        self._cv_scores = state["cv_scores"]
-        self.calibrate = state["calibrate"]
-        self._is_fitted = True
+        if isinstance(state, XGBoostPredictor):
+            # Handle legacy/alternative save format where entire object was pickled
+            logger.info("Loaded XGBoostPredictor object directly")
+            self._model = state._model
+            self._calibrated_model = state._calibrated_model
+            self._feature_names = state._feature_names
+            self.params = state.params
+            self._cv_scores = state._cv_scores
+            self.calibrate = state.calibrate
+            self._is_fitted = state._is_fitted
+        else:
+            # Handle standard save format (state dict)
+            self._model = state["model"]
+            self._calibrated_model = state["calibrated_model"]
+            self._feature_names = state["feature_names"]
+            self.params = state["params"]
+            self._cv_scores = state["cv_scores"]
+            self.calibrate = state["calibrate"]
+            self._is_fitted = True
         
         logger.info(f"Model loaded from {path}.pkl")
         

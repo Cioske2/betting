@@ -297,7 +297,37 @@ class FeatureEngineer:
         self._league_stats: Dict[int, Dict] = {}
         self._elo_ratings: Dict[int, float] = {}  # team_id -> rating
         self._elo_k_factor = 32
+        self._elo_k_factor = 32
         self._elo_home_advantage = 50
+
+    def get_last_n_matches(self, team_id: int, n: int = 10) -> List[Dict]:
+        """
+        Get the last n matches for a team.
+        
+        Args:
+            team_id: Team ID
+            n: Number of matches to return
+            
+        Returns:
+            List of match dictionaries
+        """
+        if self._matches_df is None or self._matches_df.empty:
+            return []
+            
+        # Filter for team matches
+        team_matches = self._matches_df[
+            (self._matches_df["home_team_id"] == team_id) | 
+            (self._matches_df["away_team_id"] == team_id)
+        ].copy()
+        
+        if team_matches.empty:
+            return []
+            
+        # Sort by date descending and take top n
+        team_matches = team_matches.sort_values("date", ascending=False).head(n)
+        
+        return team_matches.to_dict("records")
+
     
     def load_matches(self, matches: List[Match]) -> None:
         """
