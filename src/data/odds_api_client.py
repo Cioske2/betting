@@ -238,10 +238,29 @@ class OddsApiClient:
             data = response.json()
             logger.info(f"The Odds API: Found {len(data)} matches for {sport_key}")
             return data
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 422:
+                # Handle invalid markets error (likely doublechance not supported)
+                logger.warning(f"The Odds API returned 422 for {sport_key} with markets={markets}. Retrying with simpler markets.")
+                if "doublechance" in markets:
+                    # Retry with just h2h and totals
+                    new_markets = "h2h,totals"
+                    try:
+                        params["markets"] = new_markets
+                        response = await self.client.get(url, params=params)
+                        response.raise_for_status()
+                        data = response.json()
+                        logger.info(f"The Odds API: Found {len(data)} matches for {sport_key} (fallback markets)")
+                        return data
+                    except Exception as retry_e:
+                        logger.error(f"Retry failed for {sport_key}: {retry_e}")
+                        return []
+            
+            logger.error(f"Error fetching odds from The Odds API: {e}")
+            logger.error(f"Response Body: {e.response.text}")
+            return []
         except Exception as e:
             logger.error(f"Error fetching odds from The Odds API: {e}")
-            if 'response' in locals():
-                 logger.error(f"Response Body: {response.text}")
             return []
 
     async def get_all_league_odds(self, league_ids: List[int]) -> Dict[str, Any]:
