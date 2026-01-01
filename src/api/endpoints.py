@@ -401,6 +401,17 @@ async def _get_predictions_core(
     Get upcoming matches with dynamic Poisson predictions and real-time odds for multiple leagues.
     Internal core function used by multiple endpoints.
     """
+    # Try cache first
+    from ..data.cache_client import get_cache_client
+    cache = get_cache_client()
+    
+    cached = await cache.get_predictions(league_ids, days)
+    if cached:
+        logger.info(f"Cache HIT for predictions: leagues={league_ids}, days={days}")
+        return cached
+    
+    logger.info(f"Cache MISS for predictions: leagues={league_ids}, days={days}")
+    
     fd_client = get_fd_client()
     odds_client = get_odds_api_client()
     ensemble = get_ensemble()
@@ -409,8 +420,14 @@ async def _get_predictions_core(
     try:
         ids = [int(i.strip()) for i in league_ids.split(",") if i.strip()]
         
-        # 1. Fetch real-time odds for all leagues upfront to minimize API calls
-        all_league_odds = await odds_client.get_all_league_odds(ids)
+        # 1. Fetch real-time odds (also check cache)
+        all_league_odds = await cache.get_odds(league_ids)
+        if not all_league_odds:
+            all_league_odds = await odds_client.get_all_league_odds(ids)
+            await cache.set_odds(league_ids, all_league_odds)
+            logger.info(f"Fetched and cached odds for {league_ids}")
+        else:
+            logger.info(f"Using cached odds for {league_ids}")
         
         # Determine current season
         from datetime import datetime
@@ -472,19 +489,25 @@ async def _get_predictions_core(
                 ou_odds = {"over": 1.0, "under": 1.0}
                 btts_odds = {"yes": 1.0, "no": 1.0}
                 
-                # Match odds from odds-api
+                # Match odds from odds-api using dictionary key lookup
                 home_norm = normalize_team(f.home_team_name)
                 away_norm = normalize_team(f.away_team_name)
                 
-                match_odds = None
-                for o in all_league_odds:
-                    if (normalize_team(o.home_team) == home_norm and normalize_team(o.away_team) == away_norm) or \
-                       (normalize_team(o.home_team) == away_norm and normalize_team(o.away_team) == home_norm):
-                        match_odds = o
-                        break
+                # Build match key to lookup in odds dict (format: "team1_vs_team2")
+                match_key = f"{home_norm}_vs_{away_norm}"
+                match_key_reverse = f"{away_norm}_vs_{home_norm}"
                 
-                if match_odds:
-                    odds_1x2 = {"1": match_odds.home_win, "X": match_odds.draw, "2": match_odds.away_win}
+                match_odds = all_league_odds.get(match_key) or all_league_odds.get(match_key_reverse)
+                
+                if match_odds and match_odds.get("1x2"):
+                    odds_1x2 = match_odds["1x2"]
+                    if match_odds.get("ou_2.5"):
+                        ou_odds = match_odds["ou_2.5"]
+                    if match_odds.get("btts"):
+                        btts_odds = match_odds["btts"]
+                    logger.info(f"✓ Matched odds for {f.home_team_name} vs {f.away_team_name}: 1={odds_1x2.get('1')}, X={odds_1x2.get('X')}, 2={odds_1x2.get('2')}")
+                else:
+                    logger.warning(f"✗ No odds found for {f.home_team_name} vs {f.away_team_name} (keys tried: {match_key}, {match_key_reverse})")
 
                 match_result = {
                     "fixture_id": f.match_id,
@@ -516,7 +539,8 @@ async def _get_predictions_core(
                     "odds": {
                         "1x2": odds_1x2,
                         "ou_2.5": ou_odds,
-                        "btts": btts_odds
+                        "btts": btts_odds,
+                        "double_chance": match_odds.get("double_chance", {}) if match_odds else {}
                     },
                     "ev": {}
                 }
@@ -579,8 +603,13 @@ async def _get_predictions_core(
             except Exception as fixture_error:
                 logger.error(f"Error processing fixture {f.match_id}: {fixture_error}")
                 continue
-                
-        return {"matches": all_matches}
+        
+        # Cache the result before returning
+        result = {"matches": all_matches}
+        await cache.set_predictions(league_ids, days, result)
+        logger.info(f"Cached predictions for leagues={league_ids}, days={days}")
+        
+        return result
     except Exception as e:
         logger.error(f"Predictions core failed: {e}")
         return {"matches": [], "error": str(e)}
@@ -619,11 +648,18 @@ async def get_upcoming_matches_v1(
 @router.get("/v1/recommendations/safe-accumulator", tags=["Recommendations"])
 async def get_safe_accumulator(
     league_ids: Optional[str] = Query(default=None, description="Comma-separated League IDs"),
-    days: int = Query(default=2, ge=1, le=14, description="Days ahead")
+    days: int = Query(default=7, ge=1, le=14, description="Days ahead (default 7 for next matchday)")
 ):
     """
-    Generate a 'Safe' Accumulator betting slip.
-    Selects top 4 matches based on risk analysis and high probabilities.
+    Generate a 'Safe' Accumulator betting slip with value-weighted scoring.
+    
+    Scoring considers:
+    - Probability (safety/confidence)
+    - Real odds (return potential)
+    - Edge vs fair odds (value)
+    
+    A pick at 1.50 with 80% confidence is preferred over 1.03 with 82% confidence
+    because the value-adjusted score is higher.
     """
     # Use all configured leagues if none provided
     if not league_ids:
@@ -635,52 +671,111 @@ async def get_safe_accumulator(
     
     candidates = []
     for m in matches:
-        # Filter 1: No SKIP matches
+        # Filter: No SKIP matches
         if m.get("advisor", {}).get("action") == "SKIP":
             continue
             
         probs = m["predictions"]["1x2"]
         dc = m["double_chance"]
+        real_odds = m.get("odds", {}).get("1x2", {})
+        dc_odds = m.get("odds", {}).get("double_chance", {})
+        fair_odds = m.get("fair_odds", {})
+        confidence = m.get("confidence", "LOW")
         
-        sel = None
-        p = 0
+        # Confidence multiplier: HIGH=1.2, MEDIUM=1.0, LOW=0.8
+        conf_mult = {"HIGH": 1.2, "MEDIUM": 1.0, "LOW": 0.8}.get(confidence, 1.0)
         
-        # Smart Selection Logic
-        if probs["1"] > 0.75:
-            sel, p = "1", probs["1"]
-        elif dc["1X"] > 0.85:
-            sel, p = "1X", dc["1X"]
-        elif probs["2"] > 0.75:
-            sel, p = "2", probs["2"]
-        elif dc["X2"] > 0.85:
-            sel, p = "X2", dc["X2"]
-            
-        if sel:
+        # Evaluate all possible selections and pick the best one
+        possible_picks = []
+        
+        # 1X2 markets
+        for sel, prob in [("1", probs.get("1", 0)), ("X", probs.get("X", 0)), ("2", probs.get("2", 0))]:
+            if prob >= 0.55:  # Minimum 55% probability threshold
+                real_odd = real_odds.get(sel, 1.0)
+                fair_odd = fair_odds.get("1x2", {}).get(sel, 1.0)
+                
+                # Skip if no real odds available (fallback = 1.0)
+                if real_odd <= 1.01:
+                    continue
+                    
+                # Calculate edge: positive means real odds are better than fair
+                edge = (real_odd / fair_odd) - 1 if fair_odd > 0 else 0
+                
+                # VALUE SCORE = probability * ln(odds) * confidence * (1 + edge)
+                # Using ln(odds) gives more weight to higher odds while keeping it balanced
+                import math
+                value_score = prob * math.log(real_odd + 1) * conf_mult * (1 + max(0, edge))
+                
+                possible_picks.append({
+                    "selection": sel,
+                    "probability": prob,
+                    "real_odd": real_odd,
+                    "fair_odd": fair_odd,
+                    "edge": edge,
+                    "value_score": value_score,
+                    "market": "1x2"
+                })
+        
+        # Double Chance markets
+        for sel, prob in [("1X", dc.get("1X", 0)), ("X2", dc.get("X2", 0)), ("12", dc.get("12", 0))]:
+            if prob >= 0.75:  # Higher threshold for DC (should be very safe)
+                real_odd = dc_odds.get(sel, 1.0)
+                fair_odd = fair_odds.get("double_chance", {}).get(sel, 1.0)
+                
+                if real_odd <= 1.01:
+                    continue
+                    
+                edge = (real_odd / fair_odd) - 1 if fair_odd > 0 else 0
+                import math
+                value_score = prob * math.log(real_odd + 1) * conf_mult * (1 + max(0, edge))
+                
+                possible_picks.append({
+                    "selection": sel,
+                    "probability": prob,
+                    "real_odd": real_odd,
+                    "fair_odd": fair_odd,
+                    "edge": edge,
+                    "value_score": value_score,
+                    "market": "double_chance"
+                })
+        
+        # Pick the best selection for this match (highest value score)
+        if possible_picks:
+            best = max(possible_picks, key=lambda x: x["value_score"])
             candidates.append({
                 "fixture_id": m["fixture_id"],
                 "teams": m["teams"],
-                "selection": sel,
-                "probability": p,
-                "fair_odd": m["fair_odds"]["1x2" if len(sel)==1 else "double_chance"][sel]
+                "selection": best["selection"],
+                "probability": best["probability"],
+                "real_odd": best["real_odd"],
+                "fair_odd": best["fair_odd"],
+                "edge": round(best["edge"] * 100, 1),  # As percentage
+                "value_score": round(best["value_score"], 3),
+                "confidence": confidence
             })
-            
-    # Sort by probability descending
-    candidates.sort(key=lambda x: x["probability"], reverse=True)
+    
+    # Sort by value_score descending (not just probability!)
+    candidates.sort(key=lambda x: x["value_score"], reverse=True)
     top_4 = candidates[:4]
     
     if not top_4:
-        return {"count": 0, "message": "No safe candidates found for the next 48h", "selections": []}
-        
+        return {"count": 0, "message": "No safe candidates found for the next matchday", "selections": []}
+    
+    # Calculate totals
     total_p = 1.0
-    total_o = 1.0
+    total_real_odd = 1.0
+    total_fair_odd = 1.0
     for c in top_4:
         total_p *= c["probability"]
-        total_o *= c["fair_odd"]
-        
+        total_real_odd *= c["real_odd"]
+        total_fair_odd *= c["fair_odd"]
+    
     return {
         "count": len(top_4),
         "total_probability": round(total_p, 4),
-        "estimated_total_odd": round(total_o, 2),
+        "estimated_total_odd": round(total_fair_odd, 2),
+        "real_total_odd": round(total_real_odd, 2),
+        "avg_edge": round(sum(c["edge"] for c in top_4) / len(top_4), 1),
         "selections": top_4
     }
 

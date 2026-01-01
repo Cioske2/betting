@@ -175,11 +175,13 @@ def normalize_team(name: str) -> str:
 def sanitize_markets(markets: str) -> str:
     """Normalize requested markets to supported ones.
 
-    Removes unsupported markets (e.g., btts) and falls back to 'h2h' if
+    Removes unsupported markets and falls back to 'h2h' if
     nothing remains supported. This keeps the default behavior safe
     when calling the external API.
+    
+    Supported: h2h (1X2), totals (O/U), doublechance (1X, X2, 12)
     """
-    supported = ["h2h", "totals"]
+    supported = ["h2h", "totals", "doublechance"]
     parts = [m.strip().lower() for m in markets.split(",") if m.strip()]
     filtered = [m for m in parts if m in supported]
     if not filtered:
@@ -213,7 +215,7 @@ class OddsApiClient:
             
         self.client = httpx.AsyncClient(timeout=15.0)
 
-    async def get_odds(self, sport_key: str, regions: str = "eu", markets: str = "h2h,totals") -> List[Dict]:
+    async def get_odds(self, sport_key: str, regions: str = "eu", markets: str = "h2h,totals,doublechance") -> List[Dict]:
         """
         Fetch odds for a specific sport and markets.
         """
@@ -263,7 +265,8 @@ class OddsApiClient:
                 match_odds = {
                     "1x2": {},
                     "ou_2.5": {},
-                    "btts": {}
+                    "btts": {},
+                    "double_chance": {}  # 1X, X2, 12
                 }
                 
                 # Extract odds from bookmakers
@@ -311,6 +314,18 @@ class OddsApiClient:
                                 for outcome in market["outcomes"]:
                                     if outcome["name"].lower() == "yes": match_odds["btts"]["yes"] = outcome["price"]
                                     else: match_odds["btts"]["no"] = outcome["price"]
+                                    
+                            elif market["key"] == "doublechance" and not match_odds["double_chance"]:
+                                # Double Chance: 1X (Home or Draw), X2 (Draw or Away), 12 (Home or Away)
+                                for outcome in market["outcomes"]:
+                                    name = outcome["name"].upper().replace(" ", "")
+                                    # The Odds API uses patterns like "Home or Draw", "Draw or Away", etc.
+                                    if "HOME" in name and "DRAW" in name:
+                                        match_odds["double_chance"]["1X"] = outcome["price"]
+                                    elif "AWAY" in name and "DRAW" in name:
+                                        match_odds["double_chance"]["X2"] = outcome["price"]
+                                    elif ("HOME" in name and "AWAY" in name) or name == "12":
+                                        match_odds["double_chance"]["12"] = outcome["price"]
                         
                                 # If we found at least H2H, we can stop searching bookies
                         if match_odds["1x2"]:

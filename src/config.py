@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     supabase_url: str = Field(default="", description="Supabase URL")
     supabase_key: str = Field(default="", description="Supabase API key")
     
+    # Redis Cache (optional - falls back to in-memory if not configured)
+    redis_url: str = Field(
+        default="",
+        description="Redis URL (e.g., redis://localhost:6379). Leave empty for in-memory cache."
+    )
+    
     # League IDs for API-Football
     # 39=Premier League, 140=La Liga, 135=Serie A, 78=Bundesliga, 61=Ligue 1
     leagues: str = Field(
@@ -58,8 +64,8 @@ class Settings(BaseSettings):
     
     # Feature engineering
     form_matches: int = Field(
-        default=5,
-        description="Number of recent matches for form calculation"
+        default=10,
+        description="Number of recent matches for form calculation (first 5 weighted more)"
     )
     # Season decay factor for ELO weighting: previous season weight = season_decay, previous^2 = season_decay^2
     season_decay: float = Field(

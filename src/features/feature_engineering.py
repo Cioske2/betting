@@ -94,6 +94,15 @@ class MatchFeatures:
     home_crisis_index: float = 0.0  # home_expected_rank - home_actual_rank
     away_crisis_index: float = 0.0  # away_expected_rank - away_actual_rank
     
+    # Weighted Streaks (consecutive results weighted by opponent strength)
+    # Higher value = stronger streak against better opponents
+    home_win_streak_weighted: float = 0.0   # Consecutive wins weighted by opponent rank
+    home_loss_streak_weighted: float = 0.0  # Consecutive losses weighted by opponent rank
+    away_win_streak_weighted: float = 0.0
+    away_loss_streak_weighted: float = 0.0
+    home_unbeaten_streak: int = 0  # Raw unbeaten streak count
+    away_unbeaten_streak: int = 0
+    
     def to_dict(self) -> Dict:
         """Convert to dictionary for DataFrame creation."""
         return {
@@ -142,6 +151,13 @@ class MatchFeatures:
             # Crisis index
             "home_crisis_index": self.home_crisis_index,
             "away_crisis_index": self.away_crisis_index,
+            # Weighted streaks
+            "home_win_streak_weighted": self.home_win_streak_weighted,
+            "home_loss_streak_weighted": self.home_loss_streak_weighted,
+            "away_win_streak_weighted": self.away_win_streak_weighted,
+            "away_loss_streak_weighted": self.away_loss_streak_weighted,
+            "home_unbeaten_streak": self.home_unbeaten_streak,
+            "away_unbeaten_streak": self.away_unbeaten_streak,
         }
     
     def to_feature_vector(self) -> List[float]:
@@ -189,6 +205,13 @@ class MatchFeatures:
             # Crisis index
             self.home_crisis_index,
             self.away_crisis_index,
+            # Weighted streaks
+            self.home_win_streak_weighted,
+            self.home_loss_streak_weighted,
+            self.away_win_streak_weighted,
+            self.away_loss_streak_weighted,
+            self.home_unbeaten_streak,
+            self.away_unbeaten_streak,
         ]
     
     @staticmethod
@@ -234,6 +257,13 @@ class MatchFeatures:
             # Crisis index
             "home_crisis_index",
             "away_crisis_index",
+            # Weighted streaks
+            "home_win_streak_weighted",
+            "home_loss_streak_weighted",
+            "away_win_streak_weighted",
+            "away_loss_streak_weighted",
+            "home_unbeaten_streak",
+            "away_unbeaten_streak",
         ]
 
 
@@ -248,12 +278,13 @@ class FeatureEngineer:
     - Generate feature vectors for model input
     """
     
-    def __init__(self, form_matches: int = 5, decay_factor: float = 0.9, season_decay: float = 0.85):
+    def __init__(self, form_matches: int = 10, decay_factor: float = 0.9, season_decay: float = 0.85):
         """
         Initialize the feature engineer.
         
         Args:
-            form_matches: Number of recent matches to use for form calculation
+            form_matches: Number of recent matches to use for form calculation (default: 10).
+                         First 5 matches get full weight, matches 6-10 get half weight.
             decay_factor: Factor for time-decay weighting (0-1). 
                          1.0 means no decay, lower means older matches count less.
             season_decay: Seasonal decay factor applied to older seasons when computing ELO.
@@ -496,9 +527,14 @@ class FeatureEngineer:
         if team_matches.empty:
             return self._empty_form()
         
-        # Apply time-decay weighting
-        # The most recent match has weight 1.0, the one before decay_factor, then decay_factor^2, etc.
-        weights = np.array([self.decay_factor**i for i in range(len(team_matches))])
+        # Apply tiered + time-decay weighting
+        # First 5 matches (most recent) get base weight 1.0
+        # Matches 6-10 get base weight 0.5 (half importance)
+        # Then apply exponential time-decay on top
+        n = len(team_matches)
+        base_weights = np.array([1.0 if i < 5 else 0.5 for i in range(n)])
+        decay_weights = np.array([self.decay_factor**i for i in range(n)])
+        weights = base_weights * decay_weights
         weights = weights / weights.sum()  # Normalize weights
         
         def weighted_mean(series):
@@ -524,6 +560,102 @@ class FeatureEngineer:
             "clean_sheets_rate": 0.0,
             "btts_rate": 0.0,
             "matches": 0,
+        }
+    
+    def _calculate_weighted_streak(
+        self,
+        team_id: int,
+        before_date: datetime,
+        standings: Optional[List[Dict]] = None
+    ) -> Dict[str, float]:
+        """
+        Calculate weighted streaks based on opponent strength.
+        
+        Win streak against top teams (rank 1-6) has MORE weight than wins against
+        bottom teams (rank 15-20). This makes the streak more meaningful.
+        
+        Weight formula by opponent rank:
+        - Rank 1-3: weight = 1.0 (top teams)
+        - Rank 4-6: weight = 0.85
+        - Rank 7-10: weight = 0.7
+        - Rank 11-14: weight = 0.55
+        - Rank 15-17: weight = 0.4
+        - Rank 18-20: weight = 0.3 (bottom teams)
+        
+        Returns:
+            Dict with win_streak_weighted, loss_streak_weighted, unbeaten_streak
+        """
+        if self._matches_df is None or self._matches_df.empty:
+            return {"win_streak_weighted": 0.0, "loss_streak_weighted": 0.0, "unbeaten_streak": 0}
+        
+        # Get recent matches for team, sorted by date descending
+        team_matches = self._matches_df[
+            (self._matches_df["home_team_id"] == team_id) | 
+            (self._matches_df["away_team_id"] == team_id)
+        ]
+        team_matches = team_matches[team_matches["date"] < before_date]
+        team_matches = team_matches.sort_values("date", ascending=False)
+        
+        if team_matches.empty:
+            return {"win_streak_weighted": 0.0, "loss_streak_weighted": 0.0, "unbeaten_streak": 0}
+        
+        # Build rank lookup from standings
+        rank_lookup = {}
+        if standings:
+            for s in standings:
+                rank_lookup[s["team_id"]] = s["rank"]
+        
+        def get_opponent_weight(opponent_id: int) -> float:
+            """Weight based on opponent rank - higher ranked = more weight."""
+            rank = rank_lookup.get(opponent_id, 10)  # Default to mid-table
+            if rank <= 3:
+                return 1.0  # Top 3
+            elif rank <= 6:
+                return 0.85  # Top 6
+            elif rank <= 10:
+                return 0.7  # Upper mid
+            elif rank <= 14:
+                return 0.55  # Lower mid
+            elif rank <= 17:
+                return 0.4  # Relegation zone
+            else:
+                return 0.3  # Bottom 3
+        
+        win_streak_weighted = 0.0
+        loss_streak_weighted = 0.0
+        unbeaten_streak = 0
+        
+        # Calculate streaks
+        for _, row in team_matches.head(10).iterrows():  # Check last 10 matches
+            is_home = row["home_team_id"] == team_id
+            team_goals = row["home_goals"] if is_home else row["away_goals"]
+            opp_goals = row["away_goals"] if is_home else row["home_goals"]
+            opp_id = row["away_team_id"] if is_home else row["home_team_id"]
+            
+            weight = get_opponent_weight(opp_id)
+            
+            if team_goals > opp_goals:  # Win
+                if loss_streak_weighted == 0:  # Streak ongoing
+                    win_streak_weighted += weight
+                    unbeaten_streak += 1
+                else:
+                    break  # Streak broken by previous loss
+            elif team_goals < opp_goals:  # Loss
+                if win_streak_weighted == 0:  # Loss streak ongoing
+                    loss_streak_weighted += weight
+                    break  # Unbeaten streak ends
+                else:
+                    break  # Win streak ends
+            else:  # Draw
+                if win_streak_weighted > 0 or loss_streak_weighted == 0:
+                    unbeaten_streak += 1  # Draws count towards unbeaten
+                else:
+                    break  # Loss streak ends on draw
+        
+        return {
+            "win_streak_weighted": round(win_streak_weighted, 2),
+            "loss_streak_weighted": round(loss_streak_weighted, 2),
+            "unbeaten_streak": unbeaten_streak
         }
     
     def _calculate_attack_defense_strength(
@@ -790,6 +922,18 @@ class FeatureEngineer:
             # Negative = wealthy team underperforming (HIGH RISK)
             features.home_crisis_index = float(home_expected_rank - home_pos)
             features.away_crisis_index = float(away_expected_rank - away_pos)
+            
+            # Weighted Streaks (based on opponent strength from standings)
+            home_streak = self._calculate_weighted_streak(match.home_team_id, date, standings)
+            away_streak = self._calculate_weighted_streak(match.away_team_id, date, standings)
+            
+            features.home_win_streak_weighted = home_streak["win_streak_weighted"]
+            features.home_loss_streak_weighted = home_streak["loss_streak_weighted"]
+            features.home_unbeaten_streak = home_streak["unbeaten_streak"]
+            
+            features.away_win_streak_weighted = away_streak["win_streak_weighted"]
+            features.away_loss_streak_weighted = away_streak["loss_streak_weighted"]
+            features.away_unbeaten_streak = away_streak["unbeaten_streak"]
         
         # Economic Hierarchy Features (Market Values)
         home_value = get_team_value(match.home_team_name)

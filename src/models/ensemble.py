@@ -236,11 +236,39 @@ class EnsemblePredictor:
             except Exception as e:
                 logger.warning(f"XGBoost prediction failed: {e}")
         
-        # Combine predictions
+        # Calculate dynamic weights based on model confidence
+        # Higher max probability = more confident prediction
+        poisson_confidence = max(poisson_probs.values())  # e.g., 0.55
+        xgb_confidence = max(xgb_probs.values())  # e.g., 0.48
+        
+        # Adjust weights based on relative confidence
+        # If Poisson is more confident, increase its weight (and vice versa)
+        total_confidence = poisson_confidence + xgb_confidence
+        if total_confidence > 0:
+            # Blend base weights with confidence-based weights
+            # confidence_ratio goes from 0 to 1 for each model
+            poisson_conf_ratio = poisson_confidence / total_confidence
+            xgb_conf_ratio = xgb_confidence / total_confidence
+            
+            # Dynamic weight = 50% base weight + 50% confidence-based
+            dynamic_poisson_weight = 0.5 * self.poisson_weight + 0.5 * poisson_conf_ratio
+            dynamic_xgb_weight = 0.5 * self.xgboost_weight + 0.5 * xgb_conf_ratio
+            
+            # Normalize
+            total_weight = dynamic_poisson_weight + dynamic_xgb_weight
+            dynamic_poisson_weight /= total_weight
+            dynamic_xgb_weight /= total_weight
+        else:
+            dynamic_poisson_weight = self.poisson_weight
+            dynamic_xgb_weight = self.xgboost_weight
+        
+        logger.debug(f"Dynamic weights: Poisson={dynamic_poisson_weight:.2f}, XGBoost={dynamic_xgb_weight:.2f}")
+        
+        # Combine predictions with dynamic weights
         final_probs = np.array([
-            self.poisson_weight * poisson_probs["1"] + self.xgboost_weight * xgb_probs["1"],
-            self.poisson_weight * poisson_probs["X"] + self.xgboost_weight * xgb_probs["X"],
-            self.poisson_weight * poisson_probs["2"] + self.xgboost_weight * xgb_probs["2"],
+            dynamic_poisson_weight * poisson_probs["1"] + dynamic_xgb_weight * xgb_probs["1"],
+            dynamic_poisson_weight * poisson_probs["X"] + dynamic_xgb_weight * xgb_probs["X"],
+            dynamic_poisson_weight * poisson_probs["2"] + dynamic_xgb_weight * xgb_probs["2"],
         ])
         
         # Normalize
