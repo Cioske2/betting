@@ -332,10 +332,14 @@ class FeatureEngineer:
     def load_matches(self, matches: List[Match]) -> None:
         """
         Load historical matches for feature calculation.
+        Existing matches are preserved, new matches are added/updated.
         
         Args:
             matches: List of Match objects
         """
+        if not matches:
+            return
+
         data = []
         for m in matches:
             # Handle both Match and FDMatch objects
@@ -358,9 +362,24 @@ class FeatureEngineer:
                     "away_goals": away_goals,
                 })
         
-        self._matches_df = pd.DataFrame(data)
+        new_df = pd.DataFrame(data)
+        if new_df.empty:
+            return
+
+        new_df["date"] = pd.to_datetime(new_df["date"])
+
+        if self._matches_df is None or self._matches_df.empty:
+            self._matches_df = new_df
+        else:
+            # Merge with existing data
+            # Remove duplicates based on fixture_id if present to avoid adding same match twice
+            existing_ids = set(self._matches_df["fixture_id"].unique())
+            new_df = new_df[~new_df["fixture_id"].isin(existing_ids)]
+            
+            if not new_df.empty:
+                self._matches_df = pd.concat([self._matches_df, new_df], ignore_index=True)
+
         if not self._matches_df.empty:
-            self._matches_df["date"] = pd.to_datetime(self._matches_df["date"])
             self._matches_df = self._matches_df.sort_values("date")
             self._calculate_league_averages()
             self._calculate_all_elo_ratings()

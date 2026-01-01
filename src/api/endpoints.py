@@ -272,7 +272,7 @@ async def health_check():
         "elo_ratings_count": len(feature_eng._elo_ratings),
         "season_decay": getattr(feature_eng, "season_decay", "missing"),
         "k_factor": getattr(feature_eng, "_elo_k_factor", "missing"),
-        "leagues_data": feature_eng._matches_df["league_id"].value_counts().to_dict() if feature_eng._matches_df is not None else {}
+        "leagues_data": feature_eng._matches_df["league_id"].value_counts().to_dict() if feature_eng._matches_df is not None and not feature_eng._matches_df.empty else {}
     }
     
     return {
@@ -556,9 +556,12 @@ async def _get_predictions_core(
                         btts_odds = match_odds["btts"]
                     logger.info(f"✓ Matched odds for {f.home_team_name} vs {f.away_team_name}")
                 else:
+                    # Log first 5 keys in all_league_odds to see what we have
+                    available_keys = list(all_league_odds.keys())[:5]
                     logger.warning(
                         f"✗ No odds found for {f.home_team_name} vs {f.away_team_name}. "
-                        f"Keys tried: ['{match_key}', '{match_key_reverse}']"
+                        f"Keys tried: ['{match_key}', '{match_key_reverse}']. "
+                        f"Available keys ({len(all_league_odds)} total): {available_keys}"
                     )
 
                 match_result = {
