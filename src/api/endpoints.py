@@ -1384,10 +1384,6 @@ async def train_models_background(settings):
         logger.info("Training Poisson model...")
         await asyncio.to_thread(ensemble.fit_poisson, matches_df)
         
-        # Save models to disk (intermediate save after Poisson)
-        print("💾 Saving Poisson model to disk...")
-        save_models(ensemble, feature_eng)
-        
         # Prepare features for XGBoost
         print("🔧 Preparing features for XGBoost...")
         logger.info("Preparing features for XGBoost...")
